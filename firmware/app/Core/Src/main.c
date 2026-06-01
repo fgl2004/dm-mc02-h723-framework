@@ -30,6 +30,18 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+typedef enum
+{
+    RESET_CAUSE_UNKNOWN = 0,
+    RESET_CAUSE_PIN,
+    RESET_CAUSE_POR,
+    RESET_CAUSE_BOR,
+    RESET_CAUSE_SOFTWARE,
+    RESET_CAUSE_IWDG,
+    RESET_CAUSE_WWDG
+} ResetCause_t;
+#define ENABLE_SOFTWARE_RESET_TEST   1
+#define SOFTWARE_RESET_DELAY_MS      5000U
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -45,7 +57,8 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+static uint8_t g_reset_from_software = 0U;
+static ResetCause_t g_primary_reset_cause = RESET_CAUSE_UNKNOWN;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -56,6 +69,82 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static const char *ResetCause_ToString(ResetCause_t cause)
+{
+    switch (cause)
+    {
+        case RESET_CAUSE_PIN:
+            return "Pin Reset";
+
+        case RESET_CAUSE_POR:
+            return "Power On / Power Down Reset";
+
+        case RESET_CAUSE_BOR:
+            return "Brown-out Reset";
+
+        case RESET_CAUSE_SOFTWARE:
+            return "Software Reset";
+
+        case RESET_CAUSE_IWDG:
+            return "Independent Watchdog Reset";
+
+        case RESET_CAUSE_WWDG:
+            return "Window Watchdog Reset";
+
+        case RESET_CAUSE_UNKNOWN:
+        default:
+            return "Unknown Reset";
+    }
+}
+
+static ResetCause_t Detect_PrimaryResetCause(void)
+{
+    /*
+     * Reset flags are not mutually exclusive.
+     * PINRST may be set together with other reset flags.
+     *
+     * Therefore, do not treat PINRST as the highest-priority cause.
+     * Watchdog and software reset are usually more meaningful for diagnostics.
+     */
+
+#ifdef RCC_FLAG_IWDG1RST
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDG1RST) != 0U)
+    {
+        return RESET_CAUSE_IWDG;
+    }
+#endif
+
+#ifdef RCC_FLAG_WWDG1RST
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDG1RST) != 0U)
+    {
+        return RESET_CAUSE_WWDG;
+    }
+#endif
+
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST) != 0U)
+    {
+        return RESET_CAUSE_SOFTWARE;
+    }
+
+#ifdef RCC_FLAG_BORRST
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST) != 0U)
+    {
+        return RESET_CAUSE_BOR;
+    }
+#endif
+
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST) != 0U)
+    {
+        return RESET_CAUSE_POR;
+    }
+
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST) != 0U)
+    {
+        return RESET_CAUSE_PIN;
+    }
+
+    return RESET_CAUSE_UNKNOWN;
+}
 
 int __io_putchar(int ch)
 {
@@ -70,72 +159,51 @@ int fputc(int ch, FILE *f)
 }
 static void Print_ResetReason(void)
 {
+    g_primary_reset_cause = Detect_PrimaryResetCause();
+
+    if (g_primary_reset_cause == RESET_CAUSE_SOFTWARE)
+    {
+        g_reset_from_software = 1U;
+    }
+    else
+    {
+        g_reset_from_software = 0U;
+    }
+
     printf("----------------------------------------\r\n");
-    printf(" Reset Reason:\r\n");
+    printf(" Reset Flags:\r\n");
 
-    if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST) != 0U)
-    {
-        printf("  - PIN Reset: Yes\r\n");
-    }
-    else
-    {
-        printf("  - PIN Reset: No\r\n");
-    }
+    printf("  PINRST  : %s\r\n",
+           (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST) != 0U) ? "SET" : "RESET");
 
-    if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST) != 0U)
-    {
-        printf("  - POR/PDR Reset: Yes\r\n");
-    }
-    else
-    {
-        printf("  - POR/PDR Reset: No\r\n");
-    }
+    printf("  PORRST  : %s\r\n",
+           (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST) != 0U) ? "SET" : "RESET");
 
 #ifdef RCC_FLAG_BORRST
-    if (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST) != 0U)
-    {
-        printf("  - BOR Reset: Yes\r\n");
-    }
-    else
-    {
-        printf("  - BOR Reset: No\r\n");
-    }
+    printf("  BORRST  : %s\r\n",
+           (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST) != 0U) ? "SET" : "RESET");
 #endif
 
-    if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST) != 0U)
-    {
-        printf("  - Software Reset: Yes\r\n");
-    }
-    else
-    {
-        printf("  - Software Reset: No\r\n");
-    }
+    printf("  SFTRST  : %s\r\n",
+           (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST) != 0U) ? "SET" : "RESET");
 
 #ifdef RCC_FLAG_IWDG1RST
-    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDG1RST) != 0U)
-    {
-        printf("  - IWDG Reset: Yes\r\n");
-    }
-    else
-    {
-        printf("  - IWDG Reset: No\r\n");
-    }
+    printf("  IWDGRST : %s\r\n",
+           (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDG1RST) != 0U) ? "SET" : "RESET");
 #endif
 
 #ifdef RCC_FLAG_WWDG1RST
-    if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDG1RST) != 0U)
-    {
-        printf("  - WWDG Reset: Yes\r\n");
-    }
-    else
-    {
-        printf("  - WWDG Reset: No\r\n");
-    }
+    printf("  WWDGRST : %s\r\n",
+           (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDG1RST) != 0U) ? "SET" : "RESET");
 #endif
 
+    printf("\r\n");
+    printf(" Primary Reset Cause: %s\r\n",
+           ResetCause_ToString(g_primary_reset_cause));
+
     /*
-     * Clear reset flags after printing.
-     * Otherwise the same reset reason may remain visible after next reset.
+     * Clear reset flags after reading and printing.
+     * Reset flags are sticky and may affect the next boot diagnosis.
      */
     __HAL_RCC_CLEAR_RESET_FLAGS();
 }
@@ -208,6 +276,16 @@ int main(void)
   {
     /* USER CODE END WHILE */
     printf("[BOOT] uptime = %lu ms\r\n", HAL_GetTick());
+
+#if ENABLE_SOFTWARE_RESET_TEST
+    if ((g_reset_from_software == 0U) && (HAL_GetTick() > SOFTWARE_RESET_DELAY_MS))
+    {
+        printf("[RESET_TEST] Trigger software reset by NVIC_SystemReset()\r\n");
+        HAL_Delay(100);
+        NVIC_SystemReset();
+    }
+#endif
+
     HAL_Delay(1000);
     /* USER CODE BEGIN 3 */
   }
