@@ -1,0 +1,61 @@
+# Build outputs
+/build/
+/Debug/
+/Release/
+/Objects/
+/Listings/
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+*.o
+*.d
+*.axf
+
+# STM32CubeIDE
+.metadata/
+.settings/
+.cproject
+.project
+.mxproject
+*.launch
+
+# Keil MDK
+*.uvguix.*
+*.uvoptx
+*.uvprojx
+*.scvd
+JLinkLog.txt
+JLinkSettings.ini
+
+# VS Code
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Logs and reports
+*.log
+reports/
+temp/
+tmp/
+
+# Keys - never commit real keys
+*.pem
+*.key
+*.priv
+private_keys/
+secrets/
+
+# Release generated files
+release/*.bin
+release/*.hex
+release/*.elf
+release/*.zip
