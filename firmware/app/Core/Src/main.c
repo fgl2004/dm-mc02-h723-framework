@@ -40,13 +40,16 @@ typedef enum
     RESET_CAUSE_IWDG,
     RESET_CAUSE_WWDG
 } ResetCause_t;
-#define ENABLE_SOFTWARE_RESET_TEST   1
-#define SOFTWARE_RESET_DELAY_MS      5000U
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define ENABLE_SOFTWARE_RESET_TEST   0
+#define SOFTWARE_RESET_DELAY_MS      5000U
 
+#define ENABLE_HARDFAULT_TEST        0
+#define HARDFAULT_TEST_DELAY_MS      5000U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -59,6 +62,8 @@ typedef enum
 /* USER CODE BEGIN PV */
 static uint8_t g_reset_from_software = 0U;
 static ResetCause_t g_primary_reset_cause = RESET_CAUSE_UNKNOWN;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -69,6 +74,217 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void Print_HFSR_Decode(uint32_t hfsr)
+{
+    printf("\r\n");
+    printf("HFSR Decode:\r\n");
+
+    if ((hfsr & (1UL << 1)) != 0U)
+    {
+        printf("  - VECTTBL : Bus fault on vector table read\r\n");
+    }
+
+    if ((hfsr & (1UL << 30)) != 0U)
+    {
+        printf("  - FORCED  : Configurable fault escalated to HardFault\r\n");
+    }
+
+    if ((hfsr & (1UL << 31)) != 0U)
+    {
+        printf("  - DEBUGEVT: Debug event occurred\r\n");
+    }
+
+    if (hfsr == 0U)
+    {
+        printf("  - None\r\n");
+    }
+}
+static void Print_CFSR_Decode(uint32_t cfsr)
+{
+    uint32_t mmfsr = (cfsr & 0x000000FFUL);
+    uint32_t bfsr  = (cfsr & 0x0000FF00UL) >> 8;
+    uint32_t ufsr  = (cfsr & 0xFFFF0000UL) >> 16;
+
+    printf("\r\n");
+    printf("CFSR Decode:\r\n");
+
+    printf("  MMFSR = 0x%02lX\r\n", mmfsr);
+    printf("  BFSR  = 0x%02lX\r\n", bfsr);
+    printf("  UFSR  = 0x%04lX\r\n", ufsr);
+
+    printf("\r\n");
+    printf("MemManage Fault:\r\n");
+
+    if ((cfsr & (1UL << 0)) != 0U)
+    {
+        printf("  - IACCVIOL : Instruction access violation\r\n");
+    }
+
+    if ((cfsr & (1UL << 1)) != 0U)
+    {
+        printf("  - DACCVIOL : Data access violation\r\n");
+    }
+
+    if ((cfsr & (1UL << 3)) != 0U)
+    {
+        printf("  - MUNSTKERR: MemManage fault on exception return unstacking\r\n");
+    }
+
+    if ((cfsr & (1UL << 4)) != 0U)
+    {
+        printf("  - MSTKERR  : MemManage fault on exception entry stacking\r\n");
+    }
+
+    if ((cfsr & (1UL << 5)) != 0U)
+    {
+        printf("  - MLSPERR  : MemManage fault during lazy FP state preservation\r\n");
+    }
+
+    if ((cfsr & (1UL << 7)) != 0U)
+    {
+        printf("  - MMARVALID: MMFAR holds a valid fault address\r\n");
+    }
+
+    if (mmfsr == 0U)
+    {
+        printf("  - None\r\n");
+    }
+
+    printf("\r\n");
+    printf("BusFault:\r\n");
+
+    if ((cfsr & (1UL << 8)) != 0U)
+    {
+        printf("  - IBUSERR   : Instruction bus error\r\n");
+    }
+
+    if ((cfsr & (1UL << 9)) != 0U)
+    {
+        printf("  - PRECISERR : Precise data bus error\r\n");
+    }
+
+    if ((cfsr & (1UL << 10)) != 0U)
+    {
+        printf("  - IMPRECISERR: Imprecise data bus error\r\n");
+    }
+
+    if ((cfsr & (1UL << 11)) != 0U)
+    {
+        printf("  - UNSTKERR  : BusFault on exception return unstacking\r\n");
+    }
+
+    if ((cfsr & (1UL << 12)) != 0U)
+    {
+        printf("  - STKERR    : BusFault on exception entry stacking\r\n");
+    }
+
+    if ((cfsr & (1UL << 13)) != 0U)
+    {
+        printf("  - LSPERR    : BusFault during lazy FP state preservation\r\n");
+    }
+
+    if ((cfsr & (1UL << 15)) != 0U)
+    {
+        printf("  - BFARVALID : BFAR holds a valid fault address\r\n");
+    }
+
+    if (bfsr == 0U)
+    {
+        printf("  - None\r\n");
+    }
+
+    printf("\r\n");
+    printf("UsageFault:\r\n");
+
+    if ((cfsr & (1UL << 16)) != 0U)
+    {
+        printf("  - UNDEFINSTR: Undefined instruction\r\n");
+    }
+
+    if ((cfsr & (1UL << 17)) != 0U)
+    {
+        printf("  - INVSTATE  : Invalid EPSR/T-bit state\r\n");
+    }
+
+    if ((cfsr & (1UL << 18)) != 0U)
+    {
+        printf("  - INVPC     : Invalid PC load / EXC_RETURN\r\n");
+    }
+
+    if ((cfsr & (1UL << 19)) != 0U)
+    {
+        printf("  - NOCP      : No coprocessor\r\n");
+    }
+
+    if ((cfsr & (1UL << 24)) != 0U)
+    {
+        printf("  - UNALIGNED : Unaligned memory access\r\n");
+    }
+
+    if ((cfsr & (1UL << 25)) != 0U)
+    {
+        printf("  - DIVBYZERO : Divide by zero\r\n");
+    }
+
+    if (ufsr == 0U)
+    {
+        printf("  - None\r\n");
+    }
+}
+void HardFault_Handler_C(uint32_t *stack_frame)
+{
+    uint32_t r0;
+    uint32_t r1;
+    uint32_t r2;
+    uint32_t r3;
+    uint32_t r12;
+    uint32_t lr;
+    uint32_t pc;
+    uint32_t xpsr;
+
+    r0   = stack_frame[0];
+    r1   = stack_frame[1];
+    r2   = stack_frame[2];
+    r3   = stack_frame[3];
+    r12  = stack_frame[4];
+    lr   = stack_frame[5];
+    pc   = stack_frame[6];
+    xpsr = stack_frame[7];
+
+    printf("\r\n");
+    printf("========== HardFault ==========\r\n");
+    printf("R0   = 0x%08lX\r\n", r0);
+    printf("R1   = 0x%08lX\r\n", r1);
+    printf("R2   = 0x%08lX\r\n", r2);
+    printf("R3   = 0x%08lX\r\n", r3);
+    printf("R12  = 0x%08lX\r\n", r12);
+    printf("LR   = 0x%08lX\r\n", lr);
+    printf("PC   = 0x%08lX\r\n", pc);
+    printf("xPSR = 0x%08lX\r\n", xpsr);
+
+    printf("\r\n");
+    printf("CFSR = 0x%08lX\r\n", SCB->CFSR);
+    printf("HFSR = 0x%08lX\r\n", SCB->HFSR);
+    printf("DFSR = 0x%08lX\r\n", SCB->DFSR);
+    printf("AFSR = 0x%08lX\r\n", SCB->AFSR);
+    printf("MMFAR= 0x%08lX\r\n", SCB->MMFAR);
+    printf("BFAR = 0x%08lX\r\n", SCB->BFAR);
+		
+		Print_HFSR_Decode(SCB->HFSR);
+		Print_CFSR_Decode(SCB->CFSR);
+		
+    printf("================================\r\n");
+
+    /*
+     * Stay here for debugging.
+     * In future, this info should be stored into blackbox before reset.
+     */
+    while (1)
+    {
+    }
+}
+
+
 static const char *ResetCause_ToString(ResetCause_t cause)
 {
     switch (cause)
@@ -285,7 +501,21 @@ int main(void)
         NVIC_SystemReset();
     }
 #endif
+		
+#if ENABLE_HARDFAULT_TEST
+    if (HAL_GetTick() > HARDFAULT_TEST_DELAY_MS)
+    {
+        printf("[FAULT_TEST] Trigger HardFault test\r\n");
+        HAL_Delay(100);
 
+        /*
+         * Trigger a fault by writing to an invalid address.
+         * This is only for bring-up test.
+         */
+        volatile uint32_t *bad_addr = (uint32_t *)0xFFFFFFFFU;
+        *bad_addr = 0x12345678U;
+    }
+#endif
     HAL_Delay(1000);
     /* USER CODE BEGIN 3 */
   }
