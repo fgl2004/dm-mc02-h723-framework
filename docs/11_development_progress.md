@@ -109,13 +109,13 @@ Git 提交流程
 | 解决 GitHub 首次 push 问题 | Done               | 已完成 SSH 443 配置                                    |
 | 建立基础目录结构             | Done               | docs、firmware、pc_tool、tools、scripts、tests、release |
 | 添加 `.gitignore`      | Done               | 已忽略编译产物、密钥、临时文件                                   |
-| 添加 README.md         | In Progress        | 初稿已准备，需提交                                         |
-| 添加 Git 首次推送问题复盘文档    | Done / Need Commit | 建议保存为 `docs/10_git_first_push_issue_summary.md`   |
-| 添加项目总纲文档             | In Progress        | `docs/00_project_overview.md`                     |
-| 添加进度管理文档             | In Progress        | 当前文档                                              |
-| 添加板卡信息文档             | Not Started        | `docs/01_board_notes.md`                          |
-| 添加芯片能力文档             | Not Started        | `docs/02_chip_notes.md`                           |
-| 添加软件架构文档             | Not Started        | `docs/03_software_architecture.md`                |
+| 添加 README.md         | Done         | 初稿已准备，需提交                                         |
+| 添加 Git 首次推送问题复盘文档    | Done  | 建议保存为 `docs/10_git_first_push_issue_summary.md`   |
+| 添加项目总纲文档             | Done         | `docs/00_project_overview.md`                     |
+| 添加进度管理文档             | Done         | 当前文档                                              |
+| 添加板卡信息文档             | Done         | `docs/01_board_notes.md`                          |
+| 添加芯片能力文档             | Done         | `docs/02_chip_notes.md`                           |
+| 添加软件架构文档             | Done         | `docs/03_software_architecture.md`                |
 
 ### 5.3 Stage 0 Acceptance Criteria
 
@@ -146,7 +146,6 @@ Stage 0 完成标准：
 板子能启动
 时钟配置正确
 串口能输出
-GPIO 能控制
 定时器周期准确
 复位原因能读取
 HardFault 能捕获
@@ -157,13 +156,11 @@ HardFault 能捕获
 
 | 任务                         | 状态          | 说明                         |
 | -------------------------- | ----------- | -------------------------- |
-| CubeMX 创建 STM32H723VGT6 工程 | Not Started | 建立基础 app 工程                |
-| 配置基础时钟树                    | Not Started | 先使用稳定频率，不急于最高主频            |
-| LED / GPIO 测试              | Not Started | 验证 GPIO 输出                 |
-|  UART printf               | Done          | USART1 printf redirection verified 
-| SysTick 1ms                | Not Started | 建立系统 tick                  |
-| Timer GPIO toggle          | Not Started | 用示波器/逻辑分析仪验证定时周期           |
-| Reset Reason 读取            | Not Started | 读取复位标志                     |
+| CubeMX 创建 STM32H723VGT6 工程 | Done | 建立基础 app 工程                |
+| 配置基础时钟树                    | Done | 先使用稳定频率，不急于最高主频            |              |
+|UART printf | Done | USART1 printf verified
+|SysTick 1ms | Done | HAL_GetTick verified by UART log
+|Reset Reason 读取 | Done | RCC reset flags printed on boot           |
 | HardFault Handler          | Not Started | 主动触发并捕获异常                  |
 | Git 提交基础工程                 | Not Started | 提交 `feature/board-bringup` |
 

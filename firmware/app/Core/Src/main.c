@@ -68,7 +68,87 @@ int fputc(int ch, FILE *f)
     HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 1000);
     return ch;
 }
+static void Print_ResetReason(void)
+{
+    printf("----------------------------------------\r\n");
+    printf(" Reset Reason:\r\n");
 
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST) != 0U)
+    {
+        printf("  - PIN Reset: Yes\r\n");
+    }
+    else
+    {
+        printf("  - PIN Reset: No\r\n");
+    }
+
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST) != 0U)
+    {
+        printf("  - POR/PDR Reset: Yes\r\n");
+    }
+    else
+    {
+        printf("  - POR/PDR Reset: No\r\n");
+    }
+
+#ifdef RCC_FLAG_BORRST
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_BORRST) != 0U)
+    {
+        printf("  - BOR Reset: Yes\r\n");
+    }
+    else
+    {
+        printf("  - BOR Reset: No\r\n");
+    }
+#endif
+
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST) != 0U)
+    {
+        printf("  - Software Reset: Yes\r\n");
+    }
+    else
+    {
+        printf("  - Software Reset: No\r\n");
+    }
+
+#ifdef RCC_FLAG_IWDG1RST
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDG1RST) != 0U)
+    {
+        printf("  - IWDG Reset: Yes\r\n");
+    }
+    else
+    {
+        printf("  - IWDG Reset: No\r\n");
+    }
+#endif
+
+#ifdef RCC_FLAG_WWDG1RST
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDG1RST) != 0U)
+    {
+        printf("  - WWDG Reset: Yes\r\n");
+    }
+    else
+    {
+        printf("  - WWDG Reset: No\r\n");
+    }
+#endif
+
+    /*
+     * Clear reset flags after printing.
+     * Otherwise the same reset reason may remain visible after next reset.
+     */
+    __HAL_RCC_CLEAR_RESET_FLAGS();
+}
+
+static void Print_ClockInfo(void)
+{
+    printf("----------------------------------------\r\n");
+    printf(" Clock Info:\r\n");
+    printf("  SYSCLK = %lu Hz\r\n", HAL_RCC_GetSysClockFreq());
+    printf("  HCLK   = %lu Hz\r\n", HAL_RCC_GetHCLKFreq());
+    printf("  PCLK1  = %lu Hz\r\n", HAL_RCC_GetPCLK1Freq());
+    printf("  PCLK2  = %lu Hz\r\n", HAL_RCC_GetPCLK2Freq());
+}
 /* USER CODE END 0 */
 
 /**
@@ -102,14 +182,23 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 /* USER CODE BEGIN 2 */
-  printf("\r\n");
-  printf("========================================\r\n");
-  printf(" DM-MC02 H723 Embedded Framework\r\n");
-  printf(" Stage 1: UART Bring-up\r\n");
-  printf(" MCU: STM32H723VGT6\r\n");
-  printf(" UART: USART1 115200 8N1\r\n");
-  printf(" Build: %s %s\r\n", __DATE__, __TIME__);
-  printf("========================================\r\n");
+	HAL_UART_Transmit(&huart1, (uint8_t *)"raw uart ok\r\n", 13, 100);
+
+	printf("\r\n");
+	printf("========================================\r\n");
+	printf(" DM-MC02 H723 Embedded Framework\r\n");
+	printf(" Stage 1: Board Bring-up\r\n");
+	printf(" MCU: STM32H723VGT6\r\n");
+	printf(" UART: USART1 115200 8N1\r\n");
+	printf(" Build: %s %s\r\n", __DATE__, __TIME__);
+
+	Print_ResetReason();
+	Print_ClockInfo();
+
+	printf("----------------------------------------\r\n");
+	printf(" Tick Test:\r\n");
+	printf("  HAL_GetTick = %lu ms\r\n", HAL_GetTick());
+	printf("========================================\r\n");
 /* USER CODE END 2 */
   /* USER CODE END 2 */
 
