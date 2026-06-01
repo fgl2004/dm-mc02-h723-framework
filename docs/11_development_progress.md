@@ -160,7 +160,7 @@ HardFault 能捕获
 | CubeMX 创建 STM32H723VGT6 工程 | Not Started | 建立基础 app 工程                |
 | 配置基础时钟树                    | Not Started | 先使用稳定频率，不急于最高主频            |
 | LED / GPIO 测试              | Not Started | 验证 GPIO 输出                 |
-| UART printf                | Not Started | 建立基础日志输出                   |
+|  UART printf               | Done          | USART1 printf redirection verified 
 | SysTick 1ms                | Not Started | 建立系统 tick                  |
 | Timer GPIO toggle          | Not Started | 用示波器/逻辑分析仪验证定时周期           |
 | Reset Reason 读取            | Not Started | 读取复位标志                     |
@@ -493,7 +493,7 @@ Sprint 0: Documentation Foundation
 | docs/01_board_notes.md           | Not Started |
 | docs/02_chip_notes.md            | Not Started |
 | docs/03_software_architecture.md | Not Started |
-
+|   USART1 printf bring-up         |  Done
 ### 16.3 Sprint Exit Criteria
 
 ```text
