@@ -138,47 +138,226 @@ Stage 0 完成标准：
 
 ### 6.1 Stage Goal
 
-验证 DM-MC02 / STM32H723 的基础运行能力。
+验证 DM-MC02 / STM32H723 的基础运行能力，并建立第一批底层可观测能力。
 
-该阶段不追求复杂架构，目标是确认：
+该阶段不追求完整业务功能，也不急于进入复杂协议栈，而是优先确认：
 
 ```text
 板子能启动
-时钟配置正确
-串口能输出
-定时器周期准确
-复位原因能读取
-HardFault 能捕获
 工程能稳定编译、烧录、调试
+USART1 能作为调试生命线输出日志
+系统 Tick 正常
+时钟信息可打印
+复位原因可读取
+软件复位可验证
+HardFault 能捕获和解码
+DWT Cycle Counter 可用于性能测量
+第一批 Platform / BSP 模块可以稳定运行
 ```
+
+本阶段的核心目标是：
+
+> 先建立“能启动、能观测、能定位故障、能测量耗时”的基础能力，再进入 Stage 2 的可靠串口协议开发。
+
+---
 
 ### 6.2 Planned Tasks
 
-| 任务                         | 状态          | 说明                         |
-| -------------------------- | ----------- | -------------------------- |
-| CubeMX 创建 STM32H723VGT6 工程 | Done | 建立基础 app 工程                |
-| 配置基础时钟树                    | Done | 先使用稳定频率，不急于最高主频            |              |
-|UART printf | Done | USART1 printf verified
-|SysTick 1ms | Done | HAL_GetTick verified by UART log
-|Reset Reason 读取 | Done | RCC reset flags printed on boot           |
-| HardFault Handler          | Not Started | 主动触发并捕获异常                  |
-| Git 提交基础工程                 | Not Started | 提交 `feature/board-bringup` |
+| 任务                            | 状态       | 说明                                                                                     |
+| ----------------------------- | -------- | -------------------------------------------------------------------------------------- |
+| CubeMX 创建 STM32H723VGT6 工程    | Done     | 建立基础 app 工程                                                                            |
+| 配置基础时钟树                       | Done     | 当前使用稳定频率，不急于最高主频                                                                       |
+| USART1 printf                 | Done     | USART1 printf verified                                                                 |
+| SysTick 1ms                   | Done     | `HAL_GetTick()` verified by UART log                                                   |
+| Boot log 输出                   | Done     | 启动 Banner、Build 时间、阶段信息可打印                                                             |
+| Clock Info 打印                 | Done     | SYSCLK / HCLK / PCLK1 / PCLK2 可打印                                                      |
+| Reset Reason 读取               | Done     | RCC reset flags printed on boot                                                        |
+| Primary Reset Cause           | Done     | 多个 reset flags 可根据优先级推断主复位原因                                                           |
+| Software Reset Test           | Done     | `NVIC_SystemReset()` verified by reset reason flag                                     |
+| HardFault Handler             | Done     | 主动触发并捕获异常                                                                              |
+| HardFault Stack Frame Capture | Done     | R0/R1/R2/R3/R12/LR/PC/xPSR 可打印                                                         |
+| Fault Register Dump           | Done     | CFSR/HFSR/DFSR/AFSR/MMFAR/BFAR 可打印                                                     |
+| HardFault Decode              | Done     | CFSR/HFSR decoded by UART log                                                          |
+| Fault Diagnosis Document      | Done     | PC address location method documented                                                  |
+| DWT Cycle Counter             | Done     | CPU cycle counter verified by UART log                                                 |
+| Platform Time Module          | Done     | HAL tick and DWT cycle counter wrapped by `platform_time`                              |
+| Platform UART Module          | Done     | USART1 blocking transmit and printf retarget backend wrapped by `platform_uart`        |
+| Platform Reset Module         | Done     | Reset flag capture, primary reset cause and software reset wrapped by `platform_reset` |
+| Platform Fault Module         | Done     | HardFault capture and fault decode wrapped by `platform_fault`                         |
+| Board Log Module              | Done     | Boot banner and INFO/WARN/ERROR output wrapped by `board_log`                          |
+| Git 提交基础工程                    | Done     | 提交到 `feature/board-bringup`                                                            |
+| LED / GPIO 测试                 | Deferred | 当前板卡无明显用户 LED，暂缓                                                                       |
+| Timer GPIO Toggle             | Deferred | 后续确认可用 GPIO 后再做物理频率验证                                                                  |
 
-### 6.3 Acceptance Criteria
+---
+
+### 6.3 Current Modularized Components
+
+Stage 1 已经完成第一批底层能力模块化。
 
 ```text
-1. 固件可以正常编译和下载
-2. 板子上电后稳定运行
-3. 串口可以输出 boot log
-4. LED 可以周期翻转
-5. Timer 输出频率与配置一致
-6. Reset reason 可以通过串口打印
-7. HardFault 能进入自定义 Handler
-8. 代码提交到 GitHub
+Platform/
+  platform_time    HAL tick, DWT cycle counter, profiling, delay wrapper
+  platform_uart    USART1 blocking transmit, printf retarget backend
+  platform_reset   RCC reset flags, primary reset cause, software reset
+  platform_fault   HardFault stack frame capture, SCB fault registers, CFSR/HFSR decode
+
+BSP/
+  board_log        Boot banner, board log output, INFO/WARN/ERROR prefix
+```
+
+模块化前，较多底层逻辑集中在 `main.c`：
+
+```text
+main.c
+  ├── printf retarget
+  ├── reset reason decode
+  ├── software reset test
+  ├── DWT test
+  ├── HardFault capture
+  ├── fault decode
+  └── boot banner
+```
+
+模块化后，底层机制开始沉淀到 Platform/BSP 层：
+
+```text
+main.c
+  ↓
+board_log
+platform_time
+platform_uart
+platform_reset
+
+stm32h7xx_it.c
+  ↓
+platform_fault
+```
+
+当前阶段形成的设计原则：
+
+```text
+Platform 层负责 MCU / Cortex-M / STM32 底层能力抽象。
+BSP 层负责板级身份、板级日志、板级资源策略。
+main.c 不应长期承载大量底层诊断逻辑。
+后续 Services / Managers 应建立在稳定的 Platform/BSP 基础之上。
 ```
 
 ---
 
+### 6.4 Verified Runtime Behavior
+
+当前已验证的运行行为：
+
+```text
+1. Keil 工程可以稳定编译和下载
+2. MCU 可以正常运行到 main
+3. USART1 可以稳定输出串口日志
+4. printf 重定向正常
+5. Boot Banner 可以正常打印
+6. SYSCLK / HCLK / PCLK1 / PCLK2 可以打印
+7. HAL_GetTick() 正常递增
+8. RCC reset flags 可以读取
+9. Software Reset 可以通过 NVIC_SystemReset() 触发
+10. Software Reset 后可以通过 reset flags 识别
+11. HardFault 可以主动触发
+12. HardFault_Handler 可以进入自定义处理流程
+13. Fault 栈帧可以解析出 PC / LR / xPSR
+14. CFSR / HFSR 可以自动解码
+15. DWT CYCCNT 可以正常计数
+16. cycles 可以换算为 us / ns
+17. Platform/BSP 模块化后系统仍能正常启动
+```
+
+默认测试宏状态：
+
+```c
+#define ENABLE_SOFTWARE_RESET_TEST   0
+#define ENABLE_HARDFAULT_TEST        0
+#define ENABLE_DWT_TEST              1
+```
+
+---
+
+### 6.5 Acceptance Criteria
+
+Stage 1 当前验收情况：
+
+```text
+1. 固件可以正常编译和下载 —— Done
+2. 板子上电后稳定运行 —— Done
+3. 串口可以输出 boot log —— Done
+4. Reset reason 可以通过串口打印 —— Done
+5. Software reset 可以被触发和识别 —— Done
+6. HardFault 能进入自定义 Handler —— Done
+7. Fault 现场 PC/LR/CFSR/HFSR 可以打印 —— Done
+8. Fault 状态可以初步自动解码 —— Done
+9. DWT Cycle Counter 可以测量代码耗时 —— Done
+10. 第一批 Platform/BSP 模块稳定运行 —— Done
+11. 代码提交到 GitHub —— Done
+```
+
+暂缓项：
+
+```text
+LED 可以周期翻转 —— Deferred
+Timer 输出频率与配置一致 —— Deferred
+```
+
+暂缓原因：
+
+```text
+当前 DM-MC02 板卡没有明确用户 LED。
+Timer GPIO Toggle 需要先确认可用引脚和测试点，后续在 GPIO/Timer 资源确认后补做。
+```
+
+---
+
+### 6.6 Stage 1 Conclusion
+
+Stage 1 已经完成了最关键的底层 bring-up 和可观测能力建设。
+
+当前系统已经具备：
+
+```text
+UART 生命线
+Boot log
+Reset diagnosis
+Software reset
+Clock info
+HAL tick
+DWT profiling
+HardFault capture
+Fault decode
+第一批 Platform/BSP 模块
+```
+
+这意味着项目已经从“功能跑通”进入“可观测、可诊断、可沉淀”的阶段。
+
+下一步建议进入：
+
+```text
+Stage 1.6: App Layer Skeleton
+```
+
+目标是创建：
+
+```text
+App/app_main.h
+App/app_main.c
+```
+
+并把当前 `main.c` 中的启动流程迁移到：
+
+```c
+App_Init();
+App_Run();
+```
+
+使 `main.c` 逐步变成一个干净的系统入口。
+
+
+---
 ## 7. Stage 2: UART Reliable Protocol
 
 ### 7.1 Stage Goal

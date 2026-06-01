@@ -27,122 +27,36 @@ Project File Date:  06/01/2026
 <h2>Output:</h2>
 *** Using Compiler 'V6.15', folder: 'D:\KEIL\ARM\ARMCLANG\Bin'
 Build target 'dm_mc02_h723_app'
-../Core/Src/main.c(111): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("  MMFSR = 0x%02lX\r\n", mmfsr);
-                        ~~~~~       ^~~~~
-                        %02X
-../Core/Src/main.c(112): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("  BFSR  = 0x%02lX\r\n", bfsr);
-                        ~~~~~       ^~~~
-                        %02X
-../Core/Src/main.c(113): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("  UFSR  = 0x%04lX\r\n", ufsr);
-                        ~~~~~       ^~~~
-                        %04X
-../Core/Src/main.c(256): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("R0   = 0x%08lX\r\n", r0);
-                     ~~~~~       ^~
-                     %08X
-../Core/Src/main.c(257): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("R1   = 0x%08lX\r\n", r1);
-                     ~~~~~       ^~
-                     %08X
-../Core/Src/main.c(258): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("R2   = 0x%08lX\r\n", r2);
-                     ~~~~~       ^~
-                     %08X
-../Core/Src/main.c(259): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("R3   = 0x%08lX\r\n", r3);
-                     ~~~~~       ^~
-                     %08X
-../Core/Src/main.c(260): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("R12  = 0x%08lX\r\n", r12);
-                     ~~~~~       ^~~
-                     %08X
-../Core/Src/main.c(261): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("LR   = 0x%08lX\r\n", lr);
-                     ~~~~~       ^~
-                     %08X
-../Core/Src/main.c(262): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("PC   = 0x%08lX\r\n", pc);
-                     ~~~~~       ^~
-                     %08X
-../Core/Src/main.c(263): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("xPSR = 0x%08lX\r\n", xpsr);
-                     ~~~~~       ^~~~
-                     %08X
-../Core/Src/main.c(266): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("CFSR = 0x%08lX\r\n", SCB->CFSR);
-                     ~~~~~       ^~~~~~~~~
-                     %08X
-../Drivers/CMSIS/Include\core_cm7.h(1778): note: expanded from macro 'SCB'
-#define SCB                 ((SCB_Type       *)     SCB_BASE      )   /*!< SCB configuration struct */
-                            ^
-../Core/Src/main.c(267): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("HFSR = 0x%08lX\r\n", SCB->HFSR);
-                     ~~~~~       ^~~~~~~~~
-                     %08X
-../Drivers/CMSIS/Include\core_cm7.h(1778): note: expanded from macro 'SCB'
-#define SCB                 ((SCB_Type       *)     SCB_BASE      )   /*!< SCB configuration struct */
-                            ^
-../Core/Src/main.c(268): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("DFSR = 0x%08lX\r\n", SCB->DFSR);
-                     ~~~~~       ^~~~~~~~~
-                     %08X
-../Drivers/CMSIS/Include\core_cm7.h(1778): note: expanded from macro 'SCB'
-#define SCB                 ((SCB_Type       *)     SCB_BASE      )   /*!< SCB configuration struct */
-                            ^
-../Core/Src/main.c(269): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("AFSR = 0x%08lX\r\n", SCB->AFSR);
-                     ~~~~~       ^~~~~~~~~
-                     %08X
-../Drivers/CMSIS/Include\core_cm7.h(1778): note: expanded from macro 'SCB'
-#define SCB                 ((SCB_Type       *)     SCB_BASE      )   /*!< SCB configuration struct */
-                            ^
-../Core/Src/main.c(270): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("MMFAR= 0x%08lX\r\n", SCB->MMFAR);
-                     ~~~~~       ^~~~~~~~~~
-                     %08X
-../Drivers/CMSIS/Include\core_cm7.h(1778): note: expanded from macro 'SCB'
-#define SCB                 ((SCB_Type       *)     SCB_BASE      )   /*!< SCB configuration struct */
-                            ^
-../Core/Src/main.c(271): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("BFAR = 0x%08lX\r\n", SCB->BFAR);
-                     ~~~~~       ^~~~~~~~~
-                     %08X
-../Drivers/CMSIS/Include\core_cm7.h(1778): note: expanded from macro 'SCB'
-#define SCB                 ((SCB_Type       *)     SCB_BASE      )   /*!< SCB configuration struct */
-                            ^
-../Core/Src/main.c(431): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../Core/Src/main.c(80): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  SYSCLK = %lu Hz\r\n", HAL_RCC_GetSysClockFreq());
                        ~~~          ^~~~~~~~~~~~~~~~~~~~~~~~~
                        %u
-../Core/Src/main.c(432): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../Core/Src/main.c(81): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  HCLK   = %lu Hz\r\n", HAL_RCC_GetHCLKFreq());
                        ~~~          ^~~~~~~~~~~~~~~~~~~~~
                        %u
-../Core/Src/main.c(433): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../Core/Src/main.c(82): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  PCLK1  = %lu Hz\r\n", HAL_RCC_GetPCLK1Freq());
                        ~~~          ^~~~~~~~~~~~~~~~~~~~~~
                        %u
-../Core/Src/main.c(434): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../Core/Src/main.c(83): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  PCLK2  = %lu Hz\r\n", HAL_RCC_GetPCLK2Freq());
                        ~~~          ^~~~~~~~~~~~~~~~~~~~~~
                        %u
-../Core/Src/main.c(484): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-        printf("  HAL_GetTick = %lu ms\r\n", HAL_GetTick());
-                                ~~~          ^~~~~~~~~~~~~
-                                %u
-../Core/Src/main.c(494): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("[BOOT] uptime = %lu ms\r\n", HAL_GetTick());
-                            ~~~          ^~~~~~~~~~~~~
+../Core/Src/main.c(131): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+  printf("  HAL_GetTick = %lu ms\r\n", PlatformTime_GetMs());
+                          ~~~          ^~~~~~~~~~~~~~~~~~~~
+                          %u
+../Core/Src/main.c(147): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+    printf("[BOOT] uptime = %lu ms\r\n", PlatformTime_GetMs());
+                            ~~~          ^~~~~~~~~~~~~~~~~~~~
                             %u
-23 warnings generated.
+6 warnings generated.
 compiling main.c...
 linking...
-Program Size: Code=18148 RO-data=2348 RW-data=20 ZI-data=1188  
+Program Size: Code=21444 RO-data=2268 RW-data=20 ZI-data=1188  
 FromELF: creating hex file...
-"dm_mc02_h723_app\dm_mc02_h723_app.axf" - 0 Error(s), 23 Warning(s).
+"dm_mc02_h723_app\dm_mc02_h723_app.axf" - 0 Error(s), 6 Warning(s).
 
 <h2>Software Packages used:</h2>
 
@@ -165,7 +79,7 @@ Package Vendor: Keil
 
    * Component: ARM::CMSIS:CORE:5.4.0
       Include file:  CMSIS\Core\Include\tz_context.h
-Build Time Elapsed:  00:00:00
+Build Time Elapsed:  00:00:01
 </pre>
 </body>
 </html>

@@ -51,7 +51,7 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-extern void HardFault_Handler_C(uint32_t *stack_frame);
+extern void PlatformFault_HandlerC(uint32_t *stack_frame);
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -86,11 +86,11 @@ void HardFault_Handler(void)
   /* USER CODE BEGIN HardFault_IRQn 0 */
   __asm volatile
   (
-      "TST lr, #4        \n"
-      "ITE EQ            \n"
-      "MRSEQ r0, MSP     \n"
-      "MRSNE r0, PSP     \n"
-      "B HardFault_Handler_C \n"
+      "TST lr, #4              \n"
+      "ITE EQ                  \n"
+      "MRSEQ r0, MSP           \n"
+      "MRSNE r0, PSP           \n"
+      "B PlatformFault_HandlerC \n"
   );
   /* USER CODE END HardFault_IRQn 0 */
   while (1)

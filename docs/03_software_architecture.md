@@ -762,6 +762,46 @@ basic app_main
 reset reason
 hardfault handler
 ```
+## Current Implemented Low-Level Modules
+
+The first Platform/BSP modules have been implemented during Stage 1 bring-up.
+
+```text
+Platform/
+  platform_time    HAL tick, DWT cycle counter, profiling
+  platform_uart    USART1 blocking transmit, printf retarget backend
+  platform_reset   RCC reset flags, primary reset cause, software reset
+  platform_fault   HardFault capture, SCB fault registers, fault decode
+
+BSP/
+  board_log        Boot banner, board log output, log level prefix
+```
+
+Current dependency direction:
+
+```text
+main.c
+  ↓
+board_log
+platform_time
+platform_reset
+platform_uart
+
+stm32h7xx_it.c
+  ↓
+platform_fault
+  ↓
+platform_uart / printf
+```
+
+Design rule:
+
+```text
+main.c should not directly contain low-level diagnosis logic.
+Platform modules own MCU/platform mechanisms.
+BSP modules own board-level identity and board-level log policy.
+Services/Managers will be introduced after the low-level platform layer becomes stable.
+```
 
 ---
 
