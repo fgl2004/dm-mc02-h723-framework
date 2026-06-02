@@ -11,7 +11,7 @@
 #include "state_machine.h"
 #include "uart_rx_consumer.h"
 #include "protocol_frame.h"
-
+#include "protocol_manager.h"
 
 #include "main.h"
 
@@ -39,7 +39,9 @@
 
 #define ENABLE_UART_RX_SLOW_FAST_TEST   0
 
-#define ENABLE_PROTOCOL_FRAME_TEST     1
+#define ENABLE_PROTOCOL_FRAME_TEST     0
+
+#define ENABLE_PROTOCOL_MANAGER_TEST     1
 
 static PlatformResetInfo_t g_reset_info;
 
@@ -523,6 +525,9 @@ void App_Init(void)
 #if ENABLE_PROTOCOL_FRAME_TEST
     App_TestProtocolFrame();
 #endif
+#if ENABLE_PROTOCOL_MANAGER_TEST
+    ProtocolManager_Init();
+#endif
     printf("========================================\r\n");
 }
 
@@ -530,6 +535,9 @@ void App_Run(void)
 {
 #if ENABLE_UART_RX_SLOW_FAST_TEST
         UartRxConsumer_Run();
+#endif
+#if ENABLE_PROTOCOL_MANAGER_TEST
+        ProtocolManager_Process();
 #endif
         App_ReportUartRxStatsPeriodically();
 
