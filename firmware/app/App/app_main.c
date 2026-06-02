@@ -26,6 +26,12 @@
 
 #define ENABLE_STATE_MACHINE_TEST    0
 
+
+
+#define ENABLE_UART_RX_DUMP_TEST       0
+#define ENABLE_UART_RX_STATS_REPORT    1
+#define UART_RX_STATS_PERIOD_MS        200U
+
 static PlatformResetInfo_t g_reset_info;
 
 typedef enum
@@ -51,6 +57,76 @@ typedef struct
 } AppTestStateMachineCtx_t;
 
 static AppTestStateMachineCtx_t g_sm_test_ctx;
+
+static void App_ProcessUartRxTest(void)
+{
+    uint8_t buf[128];
+    uint16_t len;
+
+    /*
+     * This function simulates the future ProtocolManager consuming
+     * bytes from UART RX RingBuffer.
+     *
+     * In high-speed stress test, do not print every received byte,
+     * otherwise UART TX printf will heavily disturb UART RX measurement.
+     */
+    len = PlatformUart_ReadRx(buf, sizeof(buf));
+
+#if ENABLE_UART_RX_DUMP_TEST
+    if (len > 0U)
+    {
+        BoardLog_Info("UART RX: len=%u, data=", len);
+
+        for (uint16_t i = 0U; i < len; i++)
+        {
+            printf("%02X ", buf[i]);
+        }
+
+        printf("\r\n");
+    }
+#else
+    (void)len;
+#endif
+}
+
+static void App_ReportUartRxStatsPeriodically(void)
+{
+#if ENABLE_UART_RX_STATS_REPORT
+    static uint32_t last_report_ms = 0U;
+    uint32_t now;
+    PlatformUartRxSnapshot_t s;
+
+    now = PlatformTime_GetMs();
+
+    if ((now - last_report_ms) < UART_RX_STATS_PERIOD_MS)
+    {
+        return;
+    }
+
+    last_report_ms = now;
+
+    PlatformUart_GetRxSnapshot(&s);
+
+    /*
+     * This line is designed for PC-side parser.
+     * Keep the prefix and key names stable.
+     */
+    printf("@UARTSTAT,t=%lu,rx_bytes=%lu,avail=%u,free=%u,rb_write=%lu,rb_read=%lu,overflow=%lu,rb_overflow=%lu,high=%u,half=%lu,full=%lu,idle=%lu,err=%lu\r\n",
+           now,
+           s.rx_bytes,
+           s.rx_ring_available,
+           s.rx_ring_free,
+           s.rb_write_bytes,
+           s.rb_read_bytes,
+           s.rx_ring_overflow,
+           s.rb_overflow_count,
+           s.rb_high_watermark,
+           s.rx_half_count,
+           s.rx_full_count,
+           s.rx_idle_count,
+           s.rx_error_count);
+#endif
+}
 
 static void AppTest_OnEnterIdle(void *ctx)
 {
@@ -354,7 +430,19 @@ static void App_RunHardFaultTest(void)
     }
 #endif
 }
+static void App_PrintUptimePeriodically(void)
+{
+    static uint32_t last_log_ms = 0U;
+    uint32_t now;
 
+    now = PlatformTime_GetMs();
+
+    if ((now - last_log_ms) >= 1000U)
+    {
+        last_log_ms = now;
+        BoardLog_Info("[RUN] uptime = %lu ms\r\n", now);
+    }
+}
 void App_Init(void)
 {
     PlatformUart_Init();
@@ -362,6 +450,14 @@ void App_Init(void)
     BoardLog_Init();
 
     BoardLog_PrintBootBanner();
+    if (PlatformUart_StartRxDma() == PLATFORM_UART_OK)
+    {
+        BoardLog_Info("UART RX DMA started\r\n");
+    }
+    else
+    {
+        BoardLog_Error("UART RX DMA start failed\r\n");
+    }
 
     PlatformReset_Capture(&g_reset_info);
     PlatformReset_PrintInfo(&g_reset_info);
@@ -391,10 +487,11 @@ void App_Init(void)
 
 void App_Run(void)
 {
-    BoardLog_Info("[RUN] uptime = %lu ms\r\n", PlatformTime_GetMs());
+		App_ProcessUartRxTest();
+		App_ReportUartRxStatsPeriodically();
 
     App_RunSoftwareResetTest();
     App_RunHardFaultTest();
 
-    PlatformTime_DelayMs(1000U);
+		App_PrintUptimePeriodically();
 }

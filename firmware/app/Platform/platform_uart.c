@@ -2,18 +2,69 @@
 
 #include "main.h"
 #include "usart.h"
+#include "ring_buffer.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#define PLATFORM_UART_TX_TIMEOUT_MS    100U
+#define PLATFORM_UART_TX_TIMEOUT_MS        100U
+
+#define PLATFORM_UART_DMA_RX_BUFFER_SIZE   256U
+#define PLATFORM_UART_RX_RING_SIZE         1024U
+
+static uint8_t g_uart_dma_rx_buf[PLATFORM_UART_DMA_RX_BUFFER_SIZE];
+static uint8_t g_uart_rx_ring_mem[PLATFORM_UART_RX_RING_SIZE];
+static RingBuffer_t g_uart_rx_ring;
+
+static uint16_t g_uart_dma_last_pos = 0U;
+static PlatformUartStats_t g_uart_stats;
+
+void PlatformUart_GetRxSnapshot(PlatformUartRxSnapshot_t *snapshot)
+{
+    const RingBufferStats_t *rb_stats;
+
+    if (snapshot == NULL)
+    {
+        return;
+    }
+
+    rb_stats = RingBuffer_GetStats(&g_uart_rx_ring);
+
+    snapshot->rx_dma_start_count = g_uart_stats.rx_dma_start_count;
+    snapshot->rx_half_count = g_uart_stats.rx_half_count;
+    snapshot->rx_full_count = g_uart_stats.rx_full_count;
+    snapshot->rx_idle_count = g_uart_stats.rx_idle_count;
+    snapshot->rx_bytes = g_uart_stats.rx_bytes;
+    snapshot->rx_ring_overflow = g_uart_stats.rx_ring_overflow;
+    snapshot->rx_error_count = g_uart_stats.rx_error_count;
+
+    snapshot->rx_ring_available = RingBuffer_Available(&g_uart_rx_ring);
+    snapshot->rx_ring_free = RingBuffer_Free(&g_uart_rx_ring);
+
+    if (rb_stats != NULL)
+    {
+        snapshot->rb_write_bytes = rb_stats->write_bytes;
+        snapshot->rb_read_bytes = rb_stats->read_bytes;
+        snapshot->rb_overflow_count = rb_stats->overflow_count;
+        snapshot->rb_high_watermark = rb_stats->high_watermark;
+    }
+    else
+    {
+        snapshot->rb_write_bytes = 0U;
+        snapshot->rb_read_bytes = 0U;
+        snapshot->rb_overflow_count = 0U;
+        snapshot->rb_high_watermark = 0U;
+    }
+}
 
 void PlatformUart_Init(void)
 {
-    /*
-     * USART1 is initialized by CubeMX in MX_USART1_UART_Init().
-     * This function is reserved for future platform-level UART state.
-     */
+    RingBuffer_Init(&g_uart_rx_ring,
+                    g_uart_rx_ring_mem,
+                    (uint16_t)sizeof(g_uart_rx_ring_mem));
+
+    memset(&g_uart_stats, 0, sizeof(g_uart_stats));
+    g_uart_dma_last_pos = 0U;
 }
 
 static int PlatformUart_ConvertHalStatus(HAL_StatusTypeDef status)
@@ -75,11 +126,201 @@ int PlatformUart_SendString(const char *str)
                                    (uint16_t)strlen(str));
 }
 
+static void PlatformUart_MoveDmaDataToRing(uint16_t start_pos, uint16_t end_pos)
+{
+    uint16_t written;
+    uint16_t len;
+
+    if (start_pos == end_pos)
+    {
+        return;
+    }
+
+    if (end_pos > start_pos)
+    {
+        len = (uint16_t)(end_pos - start_pos);
+
+        written = RingBuffer_Write(&g_uart_rx_ring,
+                                   &g_uart_dma_rx_buf[start_pos],
+                                   len);
+
+        g_uart_stats.rx_bytes += written;
+
+        if (written < len)
+        {
+            g_uart_stats.rx_ring_overflow++;
+        }
+    }
+    else
+    {
+        len = (uint16_t)(PLATFORM_UART_DMA_RX_BUFFER_SIZE - start_pos);
+
+        written = RingBuffer_Write(&g_uart_rx_ring,
+                                   &g_uart_dma_rx_buf[start_pos],
+                                   len);
+
+        g_uart_stats.rx_bytes += written;
+
+        if (written < len)
+        {
+            g_uart_stats.rx_ring_overflow++;
+        }
+
+        if (end_pos > 0U)
+        {
+            len = end_pos;
+
+            written = RingBuffer_Write(&g_uart_rx_ring,
+                                       &g_uart_dma_rx_buf[0],
+                                       len);
+
+            g_uart_stats.rx_bytes += written;
+
+            if (written < len)
+            {
+                g_uart_stats.rx_ring_overflow++;
+            }
+        }
+    }
+}
+
+static uint16_t PlatformUart_GetDmaCurrentPos(void)
+{
+    uint16_t pos;
+
+    /*
+     * NDTR means remaining transfer count.
+     * Current DMA write position = buffer_size - NDTR.
+     */
+    pos = (uint16_t)(PLATFORM_UART_DMA_RX_BUFFER_SIZE -
+                    __HAL_DMA_GET_COUNTER(huart1.hdmarx));
+
+    if (pos >= PLATFORM_UART_DMA_RX_BUFFER_SIZE)
+    {
+        pos = 0U;
+    }
+
+    return pos;
+}
+
+static void PlatformUart_ProcessDmaToCurrentPos(void)
+{
+    uint16_t current_pos;
+
+    current_pos = PlatformUart_GetDmaCurrentPos();
+
+    PlatformUart_MoveDmaDataToRing(g_uart_dma_last_pos, current_pos);
+
+    g_uart_dma_last_pos = current_pos;
+}
+
+int PlatformUart_StartRxDma(void)
+{
+    HAL_StatusTypeDef status;
+
+    g_uart_dma_last_pos = 0U;
+
+    status = HAL_UART_Receive_DMA(&huart1,
+                                  g_uart_dma_rx_buf,
+                                  PLATFORM_UART_DMA_RX_BUFFER_SIZE);
+
+    if (status != HAL_OK)
+    {
+        g_uart_stats.rx_error_count++;
+        return PlatformUart_ConvertHalStatus(status);
+    }
+
+    /*
+     * Enable UART IDLE interrupt.
+     * DMA half/full interrupts are generated by DMA callbacks.
+     */
+    __HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
+
+    g_uart_stats.rx_dma_start_count++;
+
+    return PLATFORM_UART_OK;
+}
+
+void PlatformUart_OnRxHalfTransfer(void)
+{
+    g_uart_stats.rx_half_count++;
+
+    /*
+     * In circular DMA, half event means DMA has reached middle.
+     * Process data from last_pos to current DMA position.
+     */
+    PlatformUart_ProcessDmaToCurrentPos();
+}
+
+void PlatformUart_OnRxTransferComplete(void)
+{
+    g_uart_stats.rx_full_count++;
+
+    /*
+     * In circular DMA, complete event means DMA has reached end and wraps.
+     * Process data from last_pos to current DMA position.
+     */
+    PlatformUart_ProcessDmaToCurrentPos();
+}
+
+void PlatformUart_OnRxIdle(void)
+{
+    g_uart_stats.rx_idle_count++;
+
+    /*
+     * IDLE means no byte arrived for one frame time.
+     * This is very useful for variable length packet.
+     */
+    PlatformUart_ProcessDmaToCurrentPos();
+}
+
+void PlatformUart_OnError(void)
+{
+    g_uart_stats.rx_error_count++;
+}
+
+uint16_t PlatformUart_ReadRx(uint8_t *buf, uint16_t len)
+{
+    return RingBuffer_Read(&g_uart_rx_ring, buf, len);
+}
+
+uint16_t PlatformUart_RxAvailable(void)
+{
+    return RingBuffer_Available(&g_uart_rx_ring);
+}
+
+const PlatformUartStats_t *PlatformUart_GetStats(void)
+{
+    return &g_uart_stats;
+}
+
+void PlatformUart_PrintStats(void)
+{
+    const RingBufferStats_t *rb_stats;
+
+    rb_stats = RingBuffer_GetStats(&g_uart_rx_ring);
+
+    printf("----------------------------------------\r\n");
+    printf(" Platform UART Stats:\r\n");
+    printf("  rx_dma_start_count = %lu\r\n", g_uart_stats.rx_dma_start_count);
+    printf("  rx_half_count      = %lu\r\n", g_uart_stats.rx_half_count);
+    printf("  rx_full_count      = %lu\r\n", g_uart_stats.rx_full_count);
+    printf("  rx_idle_count      = %lu\r\n", g_uart_stats.rx_idle_count);
+    printf("  rx_bytes           = %lu\r\n", g_uart_stats.rx_bytes);
+    printf("  rx_ring_overflow   = %lu\r\n", g_uart_stats.rx_ring_overflow);
+    printf("  rx_error_count     = %lu\r\n", g_uart_stats.rx_error_count);
+
+    if (rb_stats != NULL)
+    {
+        printf("  rb_write_bytes     = %lu\r\n", rb_stats->write_bytes);
+        printf("  rb_read_bytes      = %lu\r\n", rb_stats->read_bytes);
+        printf("  rb_overflow_count  = %lu\r\n", rb_stats->overflow_count);
+        printf("  rb_high_watermark  = %u\r\n", rb_stats->high_watermark);
+    }
+}
+
 /*
  * printf retarget.
- *
- * Keil ARM Compiler 6 may behave like GCC-compatible toolchain,
- * so both fputc() and __io_putchar() are provided.
  */
 int fputc(int ch, FILE *f)
 {
@@ -95,4 +336,28 @@ int __io_putchar(int ch)
     PlatformUart_SendByte((uint8_t)ch);
 
     return ch;
+}
+
+void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == &huart1)
+    {
+        PlatformUart_OnRxHalfTransfer();
+    }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == &huart1)
+    {
+        PlatformUart_OnRxTransferComplete();
+    }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == &huart1)
+    {
+        PlatformUart_OnError();
+    }
 }

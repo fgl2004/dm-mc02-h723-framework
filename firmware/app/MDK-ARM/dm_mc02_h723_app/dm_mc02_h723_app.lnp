@@ -2,6 +2,7 @@
 "dm_mc02_h723_app\startup_stm32h723xx.o"
 "dm_mc02_h723_app\main.o"
 "dm_mc02_h723_app\gpio.o"
+"dm_mc02_h723_app\dma.o"
 "dm_mc02_h723_app\usart.o"
 "dm_mc02_h723_app\stm32h7xx_it.o"
 "dm_mc02_h723_app\stm32h7xx_hal_msp.o"
