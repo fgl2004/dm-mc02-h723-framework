@@ -1,5 +1,7 @@
 #include "protocol_manager.h"
 
+#include "command_manager.h"
+
 #include "platform_uart.h"
 #include "platform_time.h"
 #include "board_log.h"
@@ -16,19 +18,12 @@
 #endif
 
 #ifndef PROTOCOL_MANAGER_ENABLE_FRAME_LOG
-#define PROTOCOL_MANAGER_ENABLE_FRAME_LOG           1U
-#endif
-
-#ifndef PROTOCOL_MANAGER_ENABLE_BUILTIN_COMMANDS
-#define PROTOCOL_MANAGER_ENABLE_BUILTIN_COMMANDS    1U
+#define PROTOCOL_MANAGER_ENABLE_FRAME_LOG           0U
 #endif
 
 #ifndef PROTOCOL_MANAGER_TX_BUFFER_SIZE
 #define PROTOCOL_MANAGER_TX_BUFFER_SIZE             PROTO_FRAME_MAX_SIZE
 #endif
-
-#define PROTOCOL_MANAGER_VERSION_STRING             "DM-MC02-H723,proto=1.0"
-#define PROTOCOL_MANAGER_STATUS_STRING              "OK"
 
 typedef struct
 {
@@ -38,12 +33,23 @@ typedef struct
     ProtocolManagerStats_t stats;
 
     uint8_t tx_buf[PROTOCOL_MANAGER_TX_BUFFER_SIZE];
+
+    uint8_t rx_buf[PROTOCOL_MANAGER_RX_READ_CHUNK];
+    ProtocolFrame_t rx_frame;
+    CommandManagerResponse_t cmd_resp;
+    CommandManagerEventRecord_t event_record;
+
+    uint8_t event_seq;
 } ProtocolManagerContext_t;
 
 static ProtocolManagerContext_t g_protocol_manager;
 
+static void ProtocolManager_ProcessRx(void);
+static void ProtocolManager_ProcessPendingEvents(void);
+
 static void ProtocolManager_HandleFrame(const ProtocolFrame_t *frame);
-static void ProtocolManager_LogFrame(const char *prefix, const ProtocolFrame_t *frame);
+static void ProtocolManager_HandleReq(const ProtocolFrame_t *frame);
+
 static int ProtocolManager_SendFrame(uint8_t type,
                                      uint8_t flags,
                                      uint8_t seq,
@@ -51,17 +57,9 @@ static int ProtocolManager_SendFrame(uint8_t type,
                                      const uint8_t *payload,
                                      uint16_t payload_len);
 
-static int ProtocolManager_SendResp(uint8_t seq,
-                                    uint8_t cmd,
-                                    const uint8_t *payload,
-                                    uint16_t payload_len);
-
-static int ProtocolManager_SendNack(uint8_t seq,
-                                    uint8_t cmd,
-                                    uint8_t error_code);
-
-static void ProtocolManager_HandleReq(const ProtocolFrame_t *frame);
 static void ProtocolManager_UpdateLastRx(const ProtocolFrame_t *frame);
+static void ProtocolManager_LogFrame(const char *prefix,
+                                     const ProtocolFrame_t *frame);
 
 void ProtocolManager_Init(void)
 {
@@ -85,12 +83,6 @@ void ProtocolManager_Init(void)
 
 void ProtocolManager_Process(void)
 {
-    uint8_t rx_buf[PROTOCOL_MANAGER_RX_READ_CHUNK];
-    uint16_t read_len;
-    uint16_t i;
-    uint32_t consumed_this_round = 0U;
-    int ret;
-
     if (g_protocol_manager.initialized == 0U)
     {
         return;
@@ -98,55 +90,8 @@ void ProtocolManager_Process(void)
 
     g_protocol_manager.stats.process_count++;
 
-    while (consumed_this_round < PROTOCOL_MANAGER_MAX_BYTES_PER_PROCESS)
-    {
-        read_len = PlatformUart_ReadRx(rx_buf, sizeof(rx_buf));
-
-        if (read_len == 0U)
-        {
-            break;
-        }
-
-        for (i = 0U; i < read_len; i++)
-        {
-            ret = ProtocolFrameParser_InputByte(&g_protocol_manager.parser,
-                                                rx_buf[i],
-                                                PlatformTime_GetMs());
-
-            g_protocol_manager.stats.rx_bytes_consumed++;
-            consumed_this_round++;
-
-            if (ret != PROTO_FRAME_RESULT_OK)
-            {
-                g_protocol_manager.stats.parser_error_count++;
-            }
-
-            if (ProtocolFrameParser_HasFrame(&g_protocol_manager.parser) != 0U)
-            {
-                ProtocolFrame_t frame;
-
-                ret = ProtocolFrameParser_GetFrame(&g_protocol_manager.parser,
-                                                   &frame,
-                                                   PlatformTime_GetMs());
-
-                if (ret == PROTO_FRAME_RESULT_OK)
-                {
-                    g_protocol_manager.stats.frame_received_count++;
-                    ProtocolManager_UpdateLastRx(&frame);
-                    ProtocolManager_HandleFrame(&frame);
-                }
-                else
-                {
-                    g_protocol_manager.stats.parser_error_count++;
-                }
-            }
-
-            if (consumed_this_round >= PROTOCOL_MANAGER_MAX_BYTES_PER_PROCESS)
-            {
-                break;
-            }
-        }
-    }
+    ProtocolManager_ProcessRx();
+    ProtocolManager_ProcessPendingEvents();
 }
 
 const ProtocolManagerStats_t *ProtocolManager_GetStats(void)
@@ -174,10 +119,12 @@ void ProtocolManager_PrintStats(void)
     BoardLog_Info("  rx_bytes_consumed  = %lu\r\n", g_protocol_manager.stats.rx_bytes_consumed);
     BoardLog_Info("  frame_received     = %lu\r\n", g_protocol_manager.stats.frame_received_count);
     BoardLog_Info("  frame_sent         = %lu\r\n", g_protocol_manager.stats.frame_sent_count);
-    BoardLog_Info("  ping_count         = %lu\r\n", g_protocol_manager.stats.ping_count);
-    BoardLog_Info("  get_version_count  = %lu\r\n", g_protocol_manager.stats.get_version_count);
-    BoardLog_Info("  get_status_count   = %lu\r\n", g_protocol_manager.stats.get_status_count);
-    BoardLog_Info("  unknown_cmd_count  = %lu\r\n", g_protocol_manager.stats.unknown_cmd_count);
+    BoardLog_Info("  event_sent         = %lu\r\n", g_protocol_manager.stats.event_sent_count);
+    BoardLog_Info("  req_frame_count    = %lu\r\n", g_protocol_manager.stats.req_frame_count);
+    BoardLog_Info("  resp_frame_count   = %lu\r\n", g_protocol_manager.stats.resp_frame_count);
+    BoardLog_Info("  nack_frame_count   = %lu\r\n", g_protocol_manager.stats.nack_frame_count);
+    BoardLog_Info("  event_frame_count  = %lu\r\n", g_protocol_manager.stats.event_frame_count);
+    BoardLog_Info("  other_frame_count  = %lu\r\n", g_protocol_manager.stats.other_frame_count);
     BoardLog_Info("  parser_error_count = %lu\r\n", g_protocol_manager.stats.parser_error_count);
     BoardLog_Info("  tx_error_count     = %lu\r\n", g_protocol_manager.stats.tx_error_count);
     BoardLog_Info("  build_error_count  = %lu\r\n", g_protocol_manager.stats.build_error_count);
@@ -186,6 +133,8 @@ void ProtocolManager_PrintStats(void)
     BoardLog_Info("  last_rx_seq        = 0x%02X\r\n", g_protocol_manager.stats.last_rx_seq);
     BoardLog_Info("  last_rx_cmd        = 0x%02X\r\n", g_protocol_manager.stats.last_rx_cmd);
     BoardLog_Info("  last_rx_len        = %u\r\n", g_protocol_manager.stats.last_rx_payload_len);
+    BoardLog_Info("  last_tx_type       = 0x%02X\r\n", g_protocol_manager.stats.last_tx_type);
+    BoardLog_Info("  last_tx_cmd        = 0x%02X\r\n", g_protocol_manager.stats.last_tx_cmd);
 
     if (parser_stats != NULL)
     {
@@ -201,6 +150,92 @@ void ProtocolManager_PrintStats(void)
         BoardLog_Info("  crc_error          = %lu\r\n", parser_stats->crc_error_count);
         BoardLog_Info("  busy_drop          = %lu\r\n", parser_stats->busy_drop_count);
         BoardLog_Info("  reset_count        = %lu\r\n", parser_stats->reset_count);
+    }
+}
+
+static void ProtocolManager_ProcessRx(void)
+{
+    uint16_t read_len;
+    uint16_t i;
+    uint32_t consumed_this_round = 0U;
+    int ret;
+
+    while (consumed_this_round < PROTOCOL_MANAGER_MAX_BYTES_PER_PROCESS)
+    {
+        read_len = PlatformUart_ReadRx(g_protocol_manager.rx_buf,
+                                       sizeof(g_protocol_manager.rx_buf));
+
+        if (read_len == 0U)
+        {
+            break;
+        }
+
+        for (i = 0U; i < read_len; i++)
+        {
+            ret = ProtocolFrameParser_InputByte(&g_protocol_manager.parser,
+                                                g_protocol_manager.rx_buf[i],
+                                                PlatformTime_GetMs());
+
+            g_protocol_manager.stats.rx_bytes_consumed++;
+            consumed_this_round++;
+
+            if (ret != PROTO_FRAME_RESULT_OK)
+            {
+                g_protocol_manager.stats.parser_error_count++;
+            }
+
+            if (ProtocolFrameParser_HasFrame(&g_protocol_manager.parser) != 0U)
+            {
+                ret = ProtocolFrameParser_GetFrame(&g_protocol_manager.parser,
+                                                   &g_protocol_manager.rx_frame,
+                                                   PlatformTime_GetMs());
+
+                if (ret == PROTO_FRAME_RESULT_OK)
+                {
+                    g_protocol_manager.stats.frame_received_count++;
+                    ProtocolManager_UpdateLastRx(&g_protocol_manager.rx_frame);
+                    ProtocolManager_HandleFrame(&g_protocol_manager.rx_frame);
+                }
+                else
+                {
+                    g_protocol_manager.stats.parser_error_count++;
+                }
+            }
+
+            if (consumed_this_round >= PROTOCOL_MANAGER_MAX_BYTES_PER_PROCESS)
+            {
+                break;
+            }
+        }
+    }
+}
+
+static void ProtocolManager_ProcessPendingEvents(void)
+{
+    int ret;
+    uint8_t seq;
+
+    ret = CommandManager_TryGetPendingEvent(&g_protocol_manager.event_record);
+
+    if (ret != COMMAND_MANAGER_OK)
+    {
+        return;
+    }
+
+    seq = g_protocol_manager.event_seq;
+    g_protocol_manager.event_seq++;
+
+    ret = ProtocolManager_SendFrame(PROTO_FRAME_TYPE_EVENT,
+                                    0U,
+                                    seq,
+                                    g_protocol_manager.event_record.event_id,
+                                    g_protocol_manager.event_record.payload,
+                                    g_protocol_manager.event_record.payload_len);
+
+    if (ret == PROTOCOL_MANAGER_OK)
+    {
+        g_protocol_manager.stats.event_sent_count++;
+        g_protocol_manager.stats.event_frame_count++;
     }
 }
 
@@ -230,6 +265,10 @@ static void ProtocolManager_HandleFrame(const ProtocolFrame_t *frame)
             g_protocol_manager.stats.nack_frame_count++;
             break;
 
+        case PROTO_FRAME_TYPE_EVENT:
+            g_protocol_manager.stats.event_frame_count++;
+            break;
+
         default:
             g_protocol_manager.stats.other_frame_count++;
             break;
@@ -238,96 +277,34 @@ static void ProtocolManager_HandleFrame(const ProtocolFrame_t *frame)
 
 static void ProtocolManager_HandleReq(const ProtocolFrame_t *frame)
 {
-#if PROTOCOL_MANAGER_ENABLE_BUILTIN_COMMANDS
-    static const uint8_t pong_payload[] = { 'P', 'O', 'N', 'G' };
-    static const uint8_t version_payload[] = PROTOCOL_MANAGER_VERSION_STRING;
-    static const uint8_t status_payload[] = PROTOCOL_MANAGER_STATUS_STRING;
-#endif
+    int ret;
 
     if (frame == NULL)
     {
         return;
     }
 
-#if PROTOCOL_MANAGER_ENABLE_BUILTIN_COMMANDS
-    switch (frame->cmd)
+    memset(&g_protocol_manager.cmd_resp, 0, sizeof(g_protocol_manager.cmd_resp));
+
+    ret = CommandManager_Dispatch(frame, &g_protocol_manager.cmd_resp);
+
+    if ((ret != COMMAND_MANAGER_OK) &&
+        (g_protocol_manager.cmd_resp.frame_type == 0U))
     {
-        case PROTO_CMD_PING:
-            g_protocol_manager.stats.ping_count++;
-
-            (void)ProtocolManager_SendResp(frame->seq,
-                                           frame->cmd,
-                                           pong_payload,
-                                           (uint16_t)sizeof(pong_payload));
-            break;
-
-        case PROTO_CMD_GET_VERSION:
-            g_protocol_manager.stats.get_version_count++;
-
-            /*
-             * sizeof(version_payload) includes trailing '\0'.
-             * Do not send the trailing string terminator.
-             */
-            (void)ProtocolManager_SendResp(frame->seq,
-                                           frame->cmd,
-                                           version_payload,
-                                           (uint16_t)(sizeof(version_payload) - 1U));
-            break;
-
-        case PROTO_CMD_GET_STATUS:
-            g_protocol_manager.stats.get_status_count++;
-
-            (void)ProtocolManager_SendResp(frame->seq,
-                                           frame->cmd,
-                                           status_payload,
-                                           (uint16_t)(sizeof(status_payload) - 1U));
-            break;
-
-        default:
-            g_protocol_manager.stats.unknown_cmd_count++;
-
-            (void)ProtocolManager_SendNack(frame->seq,
-                                           frame->cmd,
-                                           PROTO_ERROR_UNKNOWN_CMD);
-            break;
+        g_protocol_manager.cmd_resp.frame_type = PROTO_FRAME_TYPE_NACK;
+        g_protocol_manager.cmd_resp.cmd = frame->cmd;
+        g_protocol_manager.cmd_resp.error_code = PROTO_ERROR_INTERNAL_ERROR;
+        g_protocol_manager.cmd_resp.payload[0] = PROTO_ERROR_INTERNAL_ERROR;
+        g_protocol_manager.cmd_resp.payload[1] = frame->cmd;
+        g_protocol_manager.cmd_resp.payload_len = 2U;
     }
-#else
-    (void)ProtocolManager_SendNack(frame->seq,
-                                   frame->cmd,
-                                   PROTO_ERROR_BUSY);
-#endif
-}
 
-static int ProtocolManager_SendResp(uint8_t seq,
-                                    uint8_t cmd,
-                                    const uint8_t *payload,
-                                    uint16_t payload_len)
-{
-    return ProtocolManager_SendFrame(PROTO_FRAME_TYPE_RESP,
-                                     0U,
-                                     seq,
-                                     cmd,
-                                     payload,
-                                     payload_len);
-}
-
-static int ProtocolManager_SendNack(uint8_t seq,
-                                    uint8_t cmd,
-                                    uint8_t error_code)
-{
-    uint8_t payload[2];
-
-    payload[0] = error_code;
-    payload[1] = cmd;
-
-    g_protocol_manager.stats.last_error = error_code;
-
-    return ProtocolManager_SendFrame(PROTO_FRAME_TYPE_NACK,
-                                     0U,
-                                     seq,
-                                     cmd,
-                                     payload,
-                                     (uint16_t)sizeof(payload));
+    (void)ProtocolManager_SendFrame(g_protocol_manager.cmd_resp.frame_type,
+                                    0U,
+                                    frame->seq,
+                                    g_protocol_manager.cmd_resp.cmd,
+                                    g_protocol_manager.cmd_resp.payload,
+                                    g_protocol_manager.cmd_resp.payload_len);
 }
 
 static int ProtocolManager_SendFrame(uint8_t type,
@@ -362,6 +339,7 @@ static int ProtocolManager_SendFrame(uint8_t type,
         ProtocolFrame_t log_frame;
 
         memset(&log_frame, 0, sizeof(log_frame));
+
         log_frame.type = type;
         log_frame.flags = flags;
         log_frame.seq = seq;
@@ -394,6 +372,8 @@ static int ProtocolManager_SendFrame(uint8_t type,
     }
 
     g_protocol_manager.stats.frame_sent_count++;
+    g_protocol_manager.stats.last_tx_type = type;
+    g_protocol_manager.stats.last_tx_cmd = cmd;
 
     return PROTOCOL_MANAGER_OK;
 }
@@ -412,7 +392,8 @@ static void ProtocolManager_UpdateLastRx(const ProtocolFrame_t *frame)
     g_protocol_manager.stats.last_rx_payload_len = frame->payload_len;
 }
 
-static void ProtocolManager_LogFrame(const char *prefix, const ProtocolFrame_t *frame)
+static void ProtocolManager_LogFrame(const char *prefix,
+                                     const ProtocolFrame_t *frame)
 {
     uint16_t i;
 

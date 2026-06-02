@@ -1,10 +1,10 @@
 # UART Reliable Protocol Design
 
-## 1. Document Purpose
+## 1. 文档目的
 
 本文档用于设计 `DM-MC02 H723 Embedded Framework` 项目的 Stage 2 UART 可靠通信协议。
 
-Stage 1 已经完成：
+Stage 1 已经完成基础平台能力：
 
 ```text
 USART1 printf
@@ -14,15 +14,17 @@ Platform Reset
 Platform Fault
 Board Log
 App_Init / App_Run
+HardFault Decode
+DWT Cycle Counter
 ```
 
-Stage 2 的目标是在已有 USART1 生命线基础上，构建一个可扩展、可诊断、可测试、可逐步增强的 PC ↔ MCU 可靠通信协议。
+Stage 2 的目标是在已有 USART1 生命线基础上，构建一个可扩展、可诊断、可测试、可逐步增强的 PC ↔ MCU 通信协议框架。
 
-本协议不是简单的串口字符串命令，而是面向后续参数管理、诊断查询、固件升级、安全认证、自动化测试等功能设计的二进制通信协议。
+本协议不是简单的串口字符串命令，而是面向后续参数管理、诊断查询、固件升级、安全认证、主动事件上报、自动化测试等功能设计的二进制通信协议。
 
 ---
 
-## 2. Stage 2 Goal
+## 2. Stage 2 总目标
 
 Stage 2 的核心目标：
 
@@ -33,16 +35,19 @@ Stage 2 的核心目标：
 4. 建立协议帧格式
 5. 实现 Frame Parser
 6. 实现 CRC16 校验
-7. 实现基础命令：PING / GET_VERSION / GET_STATUS
-8. 实现 PC Python Tool
-9. 支持半包、粘包、CRC 错误、垃圾字节恢复
-10. 为 ACK / NACK / 重传 / 滑动窗口预留升级空间
+7. 实现 ProtocolManager 帧收发管理
+8. 实现 CommandManager 命令与事件语义管理
+9. 实现 McuInfoApp 信息中枢 App
+10. 支持基础命令：PING / GET_VERSION / GET_STATUS / GET_TIME_INFO
+11. 支持 MCU 主动 EVENT 上报
+12. 支持半包、粘包、CRC 错误、垃圾字节恢复
+13. 为 ACK / NACK / 重传 / 滑动窗口预留升级空间
 ```
 
-Stage 2 的第一版不追求一次实现完整 TCP 式可靠传输，而是采用分阶段演进方式：
+Stage 2 不追求一次实现完整 TCP 式可靠传输，而是采用分阶段演进方式：
 
 ```text
-V1: Reliable Frame + CRC + REQ/RESP
+V1: Reliable Frame + CRC + REQ/RESP/NACK/EVENT
 V2: SEQ + ACK/NACK + Timeout Retry
 V3: Small Sliding Window
 V4: Fragment / File Transfer / Upgrade Channel
@@ -51,53 +56,312 @@ V5: Security / HMAC / Encryption Extension
 
 ---
 
-## 3. Protocol Layering
+## 3. 当前架构决策
 
-UART 协议按以下层次设计：
+当前协议架构的核心决策：
 
 ```text
-PC Tool
-  ↓
-Command Layer
-  ↓
-Reliability Layer
-  ↓
-Frame Layer
-  ↓
-Byte Stream Layer
-  ↓
-UART DMA / RingBuffer
+1. ProtocolFrame 只负责帧格式、编码、解码、CRC、Parser 状态机
+2. ProtocolFrame 不定义具体业务命令
+3. ProtocolManager 只负责 UART 字节流接入、帧解析、帧发送
+4. CommandManager 负责 PC 命令与 MCU 事件的语义出口
+5. McuInfoApp 是 MCU 与 PC 信息交互的中心 App
+6. 其他 App 不直接操作 CommandManager / ProtocolManager
+7. 其他 App 若需要与 PC 通信，先向 McuInfoApp 上报事件或快照
+8. McuInfoApp 使用 RingBuffer 缓存内部事件
+9. CommandManager 使用 RingBuffer 缓存待发送 EVENT
+10. ProtocolManager 从 CommandManager 取 EVENT，再封装为 EVENT 帧发送给 PC
 ```
 
-各层职责：
+因此，主动上报 EVENT 不允许 App 直接调用 ProtocolManager 发送。
 
-| Layer                 | Responsibility                    |
-| --------------------- | --------------------------------- |
-| UART DMA / RingBuffer | 高效接收 UART 字节流                     |
-| Byte Stream Layer     | 从 RingBuffer 中持续取字节               |
-| Frame Layer           | 通过状态机解析完整协议帧                      |
-| Reliability Layer     | SEQ、ACK/NACK、超时、重传、窗口机制           |
-| Command Layer         | PING、GET_VERSION、GET_STATUS 等命令处理 |
-| PC Tool               | 组帧、发送、接收、测试、自动化报告                 |
-
-设计原则：
+正确路径是：
 
 ```text
-字节流层不理解命令。
-帧解析层不处理业务。
-可靠性层不直接操作硬件。
-命令层不关心 UART DMA 和 RingBuffer。
+Other App
+  ↓
+McuInfoApp_PostEvent()
+  ↓
+McuInfoApp internal RingBuffer
+  ↓
+McuInfoApp_Run()
+  ↓
+CommandManager_PostEvent()
+  ↓
+CommandManager pending event RingBuffer
+  ↓
+ProtocolManager_Process()
+  ↓
+ProtocolManager sends EVENT frame
+  ↓
+PC Tool
 ```
 
 ---
 
-## 4. UART DMA Receive Design
+## 4. Protocol Layering
 
-### 4.1 Why DMA Receive
+### 4.1 总体层次
+
+```text
+PC Tool
+  ↓
+Protocol Frame
+  ↓
+ProtocolManager
+  ↓
+CommandManager
+  ↓
+McuInfoApp
+  ↓
+Other Apps / Platform / Board
+```
+
+### 4.2 数据接收路径
+
+```text
+PC Tool
+  ↓ UART bytes
+USART1 RX DMA
+  ↓
+RX RingBuffer
+  ↓
+ProtocolManager_Process()
+  ↓
+ProtocolFrameParser_InputByte()
+  ↓
+ProtocolFrame_t
+  ↓
+CommandManager_Dispatch()
+  ↓
+McuInfoApp_HandleCommand()
+  ↓
+CommandManagerResponse_t
+  ↓
+ProtocolManager sends RESP / NACK
+```
+
+### 4.3 主动事件上报路径
+
+```text
+Other App / Platform / Fault / UART
+  ↓
+McuInfoApp_PostEvent()
+  ↓
+McuInfoApp event RingBuffer
+  ↓
+McuInfoApp_Run()
+  ↓
+CommandManager_PostEvent()
+  ↓
+CommandManager pending event RingBuffer
+  ↓
+ProtocolManager_Process()
+  ↓
+EVENT frame
+  ↓
+PC Tool
+```
+
+---
+
+## 5. 各模块职责
+
+### 5.1 ProtocolFrame
+
+位置：
+
+```text
+firmware/app/Middleware/protocol_frame.h
+firmware/app/Middleware/protocol_frame.c
+```
+
+职责：
+
+```text
+1. 定义协议帧格式
+2. 定义 Frame Type
+3. 定义 Frame Flags
+4. 定义通用 Error Code
+5. 定义 ProtocolFrame_t
+6. 实现 ProtocolFrame_Build()
+7. 实现 ProtocolFrameParser
+8. 使用通用 StateMachine 框架解析字节流
+9. 使用 CRC16 校验帧完整性
+```
+
+不允许做：
+
+```text
+1. 不定义 PING / GET_VERSION / GET_STATUS 等业务 CMD
+2. 不处理命令
+3. 不访问 Platform
+4. 不发送 UART
+```
+
+---
+
+### 5.2 ProtocolManager
+
+位置：
+
+```text
+firmware/app/Services/protocol_manager.h
+firmware/app/Services/protocol_manager.c
+```
+
+职责：
+
+```text
+1. 从 PlatformUart_ReadRx() 读取 RX RingBuffer 字节
+2. 将字节输入 ProtocolFrameParser
+3. 获取完整协议帧
+4. 将 REQ 帧交给 CommandManager_Dispatch()
+5. 根据 CommandManager 返回结果发送 RESP / NACK
+6. 从 CommandManager_TryGetPendingEvent() 获取待上报事件
+7. 将待上报事件封装成 EVENT 帧发送给 PC
+8. 维护协议收发统计
+```
+
+不允许做：
+
+```text
+1. 不直接处理 PING / GET_VERSION / GET_STATUS
+2. 不直接访问 McuInfoApp 内部数据
+3. 不对外暴露 App 可直接调用的 SendEvent 接口
+4. 不理解业务含义，只负责帧传输
+```
+
+---
+
+### 5.3 CommandManager
+
+位置：
+
+```text
+firmware/app/Services/command_manager.h
+firmware/app/Services/command_manager.c
+```
+
+职责：
+
+```text
+1. 作为 PC 命令与 MCU 事件的语义出口
+2. 接收 ProtocolManager 下发的 REQ
+3. 将命令统一转发给 McuInfoApp_HandleCommand()
+4. 接收 McuInfoApp_Run() 提交的 EVENT
+5. 使用 RingBuffer 缓存待发送 EVENT
+6. 提供 CommandManager_TryGetPendingEvent() 给 ProtocolManager
+7. 维护命令路由统计、事件队列统计、错误统计
+```
+
+不允许做：
+
+```text
+1. 不直接访问 Platform
+2. 不直接读取 UART / Reset / Fault / Time
+3. 不主动发送协议帧
+4. 不绕过 McuInfoApp 处理其他 App 的信息
+```
+
+---
+
+### 5.4 McuInfoApp
+
+位置：
+
+```text
+firmware/app/Apps/mcu_info_app.h
+firmware/app/Apps/mcu_info_app.c
+```
+
+职责：
+
+```text
+1. 作为 MCU 与 PC 信息交互的中心 App
+2. 处理 PC 查询类命令
+3. 接收其他 App / 模块上报的事件
+4. 接收其他 App / 模块更新的快照
+5. 使用 RingBuffer 缓存内部事件
+6. 在 McuInfoApp_Run() 中节流、聚合、转发事件到 CommandManager
+7. 对外提供 McuInfoApp_PostEvent()
+8. 对外提供 McuInfoApp_UpdateSnapshot()
+9. 对外提供 McuInfoApp_UpdateRuntimeStatus()
+```
+
+当前支持命令：
+
+```text
+PING
+GET_VERSION
+GET_STATUS
+GET_TIME_INFO
+GET_UART_STATS
+GET_APP_STATS
+```
+
+当前预留命令：
+
+```text
+GET_RESET_INFO
+GET_FAULT_INFO
+```
+
+设计原则：
+
+```text
+其他 App 若需要与 PC 交互，不能直接调用 CommandManager 或 ProtocolManager，
+而是向 McuInfoApp 上报事件或快照。
+```
+
+---
+
+### 5.5 RingBuffer Middleware
+
+位置：
+
+```text
+firmware/app/Middleware/ring_buffer.h
+firmware/app/Middleware/ring_buffer.c
+```
+
+职责：
+
+```text
+1. 作为 UART RX 字节流缓存
+2. 作为 McuInfoApp 内部事件队列缓存
+3. 作为 CommandManager 待发送 EVENT 队列缓存
+4. 提供 overflow / high watermark / write_bytes / read_bytes 统计
+```
+
+RingBuffer 是字节环形缓冲区，因此事件队列采用固定长度记录方式写入。
+
+示例：
+
+```c
+typedef struct
+{
+    uint8_t app_id;
+    uint8_t event_id;
+    uint16_t payload_len;
+    uint32_t tick_ms;
+    uint8_t payload[64];
+} McuInfoEventRecord_t;
+```
+
+入队时将整个结构体作为字节块写入 RingBuffer。
+
+出队时必须确保 RingBuffer 中至少存在一个完整记录长度。
+
+---
+
+## 6. UART DMA Receive Design
+
+### 6.1 Why DMA Receive
 
 UART 是字节流接口，如果使用单字节中断接收，高波特率或大量数据时 CPU 中断压力较大。
 
-因此 Stage 2 计划采用：
+因此 Stage 2 使用：
 
 ```text
 UART RX DMA Circular Mode
@@ -106,7 +370,7 @@ Transfer Complete Interrupt
 Idle Line Interrupt
 ```
 
-目标是：
+目标：
 
 ```text
 1. 降低 UART 接收中断频率
@@ -118,7 +382,7 @@ Idle Line Interrupt
 
 ---
 
-### 4.2 DMA RX Buffer
+### 6.2 DMA RX Buffer
 
 建议第一版 DMA RX buffer：
 
@@ -149,7 +413,7 @@ DMA buffer 分成两半：
 
 ---
 
-### 4.3 DMA Event Handling
+### 6.3 DMA Event Handling
 
 接收事件处理思路：
 
@@ -185,11 +449,9 @@ else:
 last_pos = current_pos
 ```
 
-这样可以处理 DMA 环形回绕。
-
 ---
 
-### 4.4 DMA + D-Cache Issue
+### 6.4 DMA + D-Cache Issue
 
 STM32H7 需要特别关注 D-Cache 和 DMA 一致性。
 
@@ -215,169 +477,11 @@ Strategy B:
 
 ---
 
-## 5. RingBuffer Design
-
-UART DMA 只负责把字节搬到 DMA buffer，协议解析不应直接处理 DMA buffer。
-
-中间增加 RX RingBuffer：
-
-```text
-UART DMA Buffer
-  ↓
-RX RingBuffer
-  ↓
-Frame Parser
-```
-
-RingBuffer 作用：
-
-```text
-1. 解耦 UART 接收和协议解析
-2. 支持半包和粘包
-3. 支持不同速率的生产者/消费者
-4. 统计 overflow 和 high water mark
-5. 后续可被 Buffer Manager 统一管理
-```
-
-建议第一版：
-
-```c
-#define UART_RX_RING_SIZE 1024
-#define UART_TX_RING_SIZE 1024
-```
-
-RingBuffer 基础接口：
-
-```c
-void RingBuffer_Init(RingBuffer_t *rb, uint8_t *buf, uint16_t size);
-uint16_t RingBuffer_Write(RingBuffer_t *rb, const uint8_t *data, uint16_t len);
-uint16_t RingBuffer_Read(RingBuffer_t *rb, uint8_t *data, uint16_t len);
-uint16_t RingBuffer_Available(const RingBuffer_t *rb);
-uint16_t RingBuffer_Free(const RingBuffer_t *rb);
-void RingBuffer_Clear(RingBuffer_t *rb);
-```
-
-统计信息：
-
-```c
-typedef struct
-{
-    uint32_t write_bytes;
-    uint32_t read_bytes;
-    uint32_t overflow_count;
-    uint16_t high_watermark;
-} RingBufferStats_t;
-```
-
----
-
-## 6. Generic State Machine Framework
-
-Stage 2 中至少会出现多个状态机：
-
-```text
-Frame Parser State Machine
-Protocol Reliability State Machine
-Command Processing State Machine
-Future Upgrade State Machine
-Future Security Authentication State Machine
-```
-
-因此需要提前设计一个通用状态机框架。
-
----
-
-### 6.1 State Machine Goal
-
-通用状态机框架目标：
-
-```text
-1. 统一状态切换风格
-2. 统一事件驱动方式
-3. 支持 enter / exit / event handler
-4. 支持状态切换日志
-5. 支持状态停留时间统计
-6. 支持后续 Diagnostic Manager 查询
-```
-
----
-
-### 6.2 Generic State Machine Concept
-
-建议抽象如下：
-
-```c
-typedef uint16_t StateId_t;
-typedef uint16_t EventId_t;
-
-typedef struct
-{
-    StateId_t current_state;
-    StateId_t previous_state;
-    uint32_t state_enter_time_ms;
-    uint32_t transition_count;
-    uint32_t error_count;
-} StateMachine_t;
-```
-
-状态处理函数：
-
-```c
-typedef void (*StateEnterFunc_t)(void *ctx);
-typedef void (*StateExitFunc_t)(void *ctx);
-typedef void (*StateEventFunc_t)(void *ctx, EventId_t event, const void *event_data);
-```
-
-状态描述：
-
-```c
-typedef struct
-{
-    StateId_t state;
-    StateEnterFunc_t on_enter;
-    StateExitFunc_t on_exit;
-    StateEventFunc_t on_event;
-} StateDef_t;
-```
-
-基础接口：
-
-```c
-void StateMachine_Init(StateMachine_t *sm, StateId_t init_state);
-void StateMachine_Transition(StateMachine_t *sm, StateId_t next_state);
-void StateMachine_Dispatch(StateMachine_t *sm, EventId_t event, const void *event_data);
-StateId_t StateMachine_GetState(const StateMachine_t *sm);
-```
-
-第一版可以先实现最小框架，后续逐步扩展。
-
----
-
-### 6.3 Where to Put State Machine
-
-通用状态机应放在 Middleware：
-
-```text
-firmware/app/Middleware/
-  state_machine.h
-  state_machine.c
-```
-
-原因：
-
-```text
-它不是某个具体业务。
-它不是某个硬件平台能力。
-它是通用机制，可复用于 Protocol、Upgrade、Security、Device Manager。
-```
-
----
-
 ## 7. Protocol Frame Format
 
 协议采用二进制帧格式。
 
-第一版帧格式：
+当前 V1 帧格式：
 
 ```text
 +------+-------+-----+------+-------+-----+-----+--------+---------+-------+
@@ -396,7 +500,7 @@ firmware/app/Middleware/
 | TYPE    |    1 | Frame type                          |
 | FLAGS   |    1 | Frame flags                         |
 | SEQ     |    1 | Sequence number                     |
-| CMD     |    1 | Command ID                          |
+| CMD     |    1 | Command ID or Event ID              |
 | LEN     |    2 | Payload length, little-endian       |
 | PAYLOAD |    N | Payload bytes                       |
 | CRC16   |    2 | CRC16 little-endian                 |
@@ -421,6 +525,14 @@ SOF2
 CRC16
 ```
 
+注意：
+
+```text
+CMD 字段在 REQ/RESP/NACK 中表示 Command ID。
+CMD 字段在 EVENT 中表示 Event ID。
+ProtocolFrame 不解释 CMD 的业务含义。
+```
+
 ---
 
 ## 8. Frame Type
@@ -441,6 +553,7 @@ V1 主要使用：
 REQ
 RESP
 NACK
+EVENT
 ```
 
 V2/V3 再逐步启用：
@@ -449,7 +562,6 @@ V2/V3 再逐步启用：
 ACK
 DATA
 WINDOW_ACK
-EVENT
 ```
 
 ---
@@ -469,33 +581,61 @@ V1 可以先保留字段但不全部使用。
 
 ---
 
-## 10. Command ID
+## 10. Command ID Design
 
-第一版命令：
+具体命令 ID 不在 ProtocolFrame 层定义。
 
-| CMD            |  Value | Direction | Description                |
-| -------------- | -----: | --------- | -------------------------- |
-| PING           | `0x01` | PC → MCU  | Communication test         |
-| GET_VERSION    | `0x02` | PC → MCU  | Get firmware version       |
-| GET_STATUS     | `0x03` | PC → MCU  | Get runtime status         |
-| GET_RESET_INFO | `0x04` | PC → MCU  | Get reset information      |
-| GET_TIME_INFO  | `0x05` | PC → MCU  | Get tick / DWT information |
+当前命令 ID 由 McuInfoApp 管理：
 
-后续扩展命令：
+| Command                     |  Value | Direction | Description               |
+| --------------------------- | -----: | --------- | ------------------------- |
+| MCU_INFO_CMD_PING           | `0x01` | PC → MCU  | Communication test        |
+| MCU_INFO_CMD_GET_VERSION    | `0x02` | PC → MCU  | Get firmware version      |
+| MCU_INFO_CMD_GET_STATUS     | `0x03` | PC → MCU  | Get runtime status        |
+| MCU_INFO_CMD_GET_RESET_INFO | `0x04` | PC → MCU  | Get reset information     |
+| MCU_INFO_CMD_GET_TIME_INFO  | `0x05` | PC → MCU  | Get tick information      |
+| MCU_INFO_CMD_GET_FAULT_INFO | `0x06` | PC → MCU  | Get fault information     |
+| MCU_INFO_CMD_GET_UART_STATS | `0x07` | PC → MCU  | Get UART RX statistics    |
+| MCU_INFO_CMD_GET_APP_STATS  | `0x08` | PC → MCU  | Get McuInfoApp statistics |
 
-| CMD                |  Value | Description                |
-| ------------------ | -----: | -------------------------- |
-| GET_FAULT_INFO     | `0x10` | Get last fault information |
-| PARAM_GET          | `0x20` | Get parameter              |
-| PARAM_SET          | `0x21` | Set parameter              |
-| ENTER_BOOTLOADER   | `0x30` | Enter bootloader           |
-| FW_TRANSFER        | `0x31` | Firmware transfer          |
-| SECURITY_CHALLENGE | `0x40` | Security challenge         |
-| SECURITY_AUTH      | `0x41` | Security authentication    |
+后续如果引入其他 App，不直接暴露给 CommandManager，而是先通过 McuInfoApp 聚合或代理。
 
 ---
 
-## 11. Error Code
+## 11. Event ID Design
+
+EVENT 帧的 CMD 字段表示 Event ID。
+
+当前 McuInfoApp 事件 ID：
+
+| Event                         |  Value | Source            | Description            |
+| ----------------------------- | -----: | ----------------- | ---------------------- |
+| MCU_INFO_EVENT_BOOT           | `0x81` | McuInfoApp        | Boot event             |
+| MCU_INFO_EVENT_HEARTBEAT      | `0x82` | McuInfoApp        | Heartbeat event        |
+| MCU_INFO_EVENT_RUNTIME_STATUS | `0x83` | Other App         | Runtime status changed |
+| MCU_INFO_EVENT_UART_WARNING   | `0x84` | UART / McuInfoApp | UART warning           |
+| MCU_INFO_EVENT_APP_MESSAGE    | `0x85` | Other App         | Generic app message    |
+| MCU_INFO_EVENT_FAULT          | `0x86` | Fault module      | Fault event            |
+
+EVENT payload 第一版格式：
+
+```text
+byte0      app_id
+byte1      original_event_id
+byte2~5    tick_ms little-endian
+byte6..N   event payload
+```
+
+说明：
+
+```text
+EVENT frame 的 CMD 已经是 event_id。
+payload 中仍保留 original_event_id，方便 PC 工具统一解析和交叉检查。
+```
+
+---
+
+## 12. Error Code
 
 |   Code | Name                | Description                  |
 | -----: | ------------------- | ---------------------------- |
@@ -513,9 +653,16 @@ V1 可以先保留字段但不全部使用。
 | `0x0B` | DUPLICATE_FRAME     | Duplicate frame              |
 | `0x0C` | UNSUPPORTED_VERSION | Unsupported protocol version |
 
+NACK payload 格式：
+
+```text
+payload[0] = error_code
+payload[1] = original_cmd
+```
+
 ---
 
-## 12. Frame Parser State Machine
+## 13. Frame Parser State Machine
 
 Frame Parser 状态机负责从字节流中恢复完整协议帧。
 
@@ -557,7 +704,7 @@ SOF2 错误：
 
 LEN 超限：
   丢弃当前帧
-  error_count++
+  len_error_count++
   回到 WAIT_SOF1
 
 CRC 错误：
@@ -574,17 +721,70 @@ Payload 不完整：
 
 ---
 
-## 13. Reliability Mechanism Roadmap
+## 14. Command / Event Processing Model
 
-### 13.1 V1: Request / Response
-
-V1 采用基础请求响应模型：
+### 14.1 PC 查询模型
 
 ```text
 PC sends REQ
-MCU parses frame
-MCU executes command
+  ↓
+ProtocolManager parses frame
+  ↓
+CommandManager_Dispatch()
+  ↓
+McuInfoApp_HandleCommand()
+  ↓
+CommandManagerResponse_t
+  ↓
+ProtocolManager sends RESP / NACK
+```
+
+### 14.2 MCU 主动上报模型
+
+```text
+Other App posts event
+  ↓
+McuInfoApp_PostEvent()
+  ↓
+McuInfoApp event RingBuffer
+  ↓
+McuInfoApp_Run()
+  ↓
+CommandManager_PostEvent()
+  ↓
+CommandManager pending event RingBuffer
+  ↓
+ProtocolManager_Process()
+  ↓
+EVENT frame
+  ↓
+PC Tool
+```
+
+该模型的核心规则：
+
+```text
+App 不直接调用 ProtocolManager。
+其他 App 不直接调用 CommandManager。
+所有对 PC 的信息出口必须进入 McuInfoApp。
+CommandManager 管理语义队列。
+ProtocolManager 只做帧发送。
+```
+
+---
+
+## 15. Reliability Mechanism Roadmap
+
+### 15.1 V1: Request / Response / Event
+
+V1 采用基础请求响应模型和异步事件模型：
+
+```text
+PC sends REQ
 MCU sends RESP or NACK
+
+MCU internal app posts event
+MCU sends EVENT
 ```
 
 特点：
@@ -592,13 +792,13 @@ MCU sends RESP or NACK
 ```text
 简单
 稳定
-适合 PING / GET_VERSION / GET_STATUS
 容易调试
+适合 PING / GET_VERSION / GET_STATUS / EVENT 上报
 ```
 
 ---
 
-### 13.2 V2: Stop-and-Wait ARQ
+### 15.2 V2: Stop-and-Wait ARQ
 
 V2 增加：
 
@@ -628,7 +828,7 @@ MCU detects duplicate SEQ and avoids repeated side effects
 
 ---
 
-### 13.3 V3: Small Sliding Window
+### 15.3 V3: Small Sliding Window
 
 V3 增加小窗口机制，用于大数据传输。
 
@@ -648,33 +848,6 @@ Sender removes acknowledged frames from window.
 Sender retransmits from next_expected_seq on timeout.
 ```
 
-示例：
-
-```text
-PC sends DATA seq=10
-PC sends DATA seq=11
-PC sends DATA seq=12
-PC sends DATA seq=13
-
-MCU receives 10, 11, 12, 13
-MCU sends WINDOW_ACK next_expected_seq=14
-```
-
-丢包示例：
-
-```text
-PC sends DATA seq=10
-PC sends DATA seq=11
-PC sends DATA seq=12
-PC sends DATA seq=13
-
-MCU receives 10, 11, 13
-MCU expects 12
-MCU sends WINDOW_ACK next_expected_seq=12
-
-PC retransmits from seq=12
-```
-
 第一版滑动窗口不支持乱序提交。
 
 如果收到乱序帧：
@@ -688,7 +861,7 @@ return WINDOW_ACK with current next_expected_seq
 
 ---
 
-### 13.4 V4: Fragment and File Transfer
+### 15.4 V4: Fragment and File Transfer
 
 V4 用于固件升级或大数据传输。
 
@@ -714,7 +887,7 @@ Blackbox upload
 
 ---
 
-### 13.5 V5: Security Extension
+### 15.5 V5: Security Extension
 
 V5 用于危险命令、安全认证和固件升级。
 
@@ -733,7 +906,7 @@ Firmware Signature
 
 ---
 
-## 14. Module Plan
+## 16. Module Plan
 
 Stage 2 代码模块规划：
 
@@ -755,9 +928,23 @@ firmware/app/
 │   ├── command_manager.h
 │   └── command_manager.c
 │
+├── Apps/
+│   ├── mcu_info_app.h
+│   └── mcu_info_app.c
+│
 ├── Platform/
 │   ├── platform_uart.h
-│   └── platform_uart.c
+│   ├── platform_uart.c
+│   ├── platform_time.h
+│   ├── platform_time.c
+│   ├── platform_reset.h
+│   ├── platform_reset.c
+│   ├── platform_fault.h
+│   └── platform_fault.c
+│
+├── Board/
+│   ├── board_log.h
+│   └── board_log.c
 │
 └── App/
     ├── app_main.h
@@ -768,56 +955,66 @@ PC 工具规划：
 
 ```text
 pc_tool/
-└── h7tool/
-    ├── cli.py
-    ├── protocol.py
-    ├── commands.py
-    ├── serial_backend.py
-    └── tests.py
+└── h7_uart_ui/
+    ├── proto_ping_test.py
+    ├── proto_command_test.py
+    ├── proto_robust_test.py
+    ├── proto_event_listen.py
+    └── h7_ui/
 ```
 
 ---
 
-## 15. Stage 2 Implementation Plan
+## 17. Stage 2 Implementation Plan
 
 推荐实现顺序：
 
-| Step | Task                     | Output                                     |
-| ---- | ------------------------ | ------------------------------------------ |
-| 2.1  | Protocol design document | `docs/04_uart_reliable_protocol_design.md` |
-| 2.2  | RingBuffer middleware    | `ring_buffer.h/.c`                         |
-| 2.3  | CRC16 middleware         | `crc16.h/.c`                               |
-| 2.4  | Generic state machine    | `state_machine.h/.c`                       |
-| 2.5  | UART DMA RX path         | `platform_uart` RX extension               |
-| 2.6  | Protocol frame parser    | `protocol_frame.h/.c`                      |
-| 2.7  | Protocol Manager         | `protocol_manager.h/.c`                    |
-| 2.8  | Command Manager          | `command_manager.h/.c`                     |
-| 2.9  | Basic commands           | PING / GET_VERSION / GET_STATUS            |
-| 2.10 | Python PC Tool           | `h7tool`                                   |
-| 2.11 | Robustness test          | half packet / sticky packet / CRC error    |
-| 2.12 | Reliability V2           | ACK / NACK / timeout / retry               |
-| 2.13 | Sliding window V3        | small window for data transfer             |
+| Step | Task                     | Output                                        |
+| ---- | ------------------------ | --------------------------------------------- |
+| 2.1  | Protocol design document | `docs/04_uart_reliable_protocol_design.md`    |
+| 2.2  | RingBuffer middleware    | `ring_buffer.h/.c`                            |
+| 2.3  | CRC16 middleware         | `crc16.h/.c`                                  |
+| 2.4  | Generic state machine    | `state_machine.h/.c`                          |
+| 2.5  | UART DMA RX path         | `platform_uart` RX extension                  |
+| 2.6  | Protocol frame parser    | `protocol_frame.h/.c`                         |
+| 2.7  | Protocol Manager         | `protocol_manager.h/.c`                       |
+| 2.8  | Command Manager          | `command_manager.h/.c`                        |
+| 2.9  | McuInfoApp               | `mcu_info_app.h/.c`                           |
+| 2.10 | Basic commands           | PING / GET_VERSION / GET_STATUS               |
+| 2.11 | EVENT path               | McuInfoApp → CommandManager → ProtocolManager |
+| 2.12 | Python PC Tool           | ping / command / robust / event listen        |
+| 2.13 | Robustness test          | half packet / sticky packet / CRC error       |
+| 2.14 | Reliability V2           | ACK / NACK / timeout / retry                  |
+| 2.15 | Sliding window V3        | small window for data transfer                |
 
 ---
 
-## 16. Stage 2 Test Plan
+## 18. Stage 2 Test Plan
 
-基础测试：
+### 18.1 基础命令测试
 
 ```text
 1. PC sends PING, MCU returns PONG
 2. PC sends GET_VERSION, MCU returns version
 3. PC sends GET_STATUS, MCU returns status
-4. PC sends invalid CMD, MCU returns UNKNOWN_CMD
-5. PC sends invalid CRC, MCU rejects frame
-6. PC sends half packet, parser waits
-7. PC sends sticky packets, parser extracts multiple frames
-8. PC sends garbage bytes before valid frame, parser recovers
-9. PC sends payload length overflow, parser rejects
-10. RX RingBuffer overflow counter increments correctly
+4. PC sends GET_TIME_INFO, MCU returns tick
+5. PC sends GET_UART_STATS, MCU returns UART stats
+6. PC sends GET_APP_STATS, MCU returns McuInfoApp stats
+7. PC sends invalid CMD, MCU returns UNKNOWN_CMD
 ```
 
-DMA 测试：
+### 18.2 Frame Parser 健壮性测试
+
+```text
+1. PC sends invalid CRC, MCU rejects frame
+2. PC sends half packet, parser waits
+3. PC sends sticky packets, parser extracts multiple frames
+4. PC sends garbage bytes before valid frame, parser recovers
+5. PC sends payload length overflow, parser rejects
+6. RX RingBuffer overflow counter increments correctly
+```
+
+### 18.3 DMA 测试
 
 ```text
 1. DMA half transfer event works
@@ -828,7 +1025,20 @@ DMA 测试：
 6. Protocol parser works with DMA source
 ```
 
-可靠性测试：
+### 18.4 EVENT 上报测试
+
+```text
+1. McuInfoApp_PostEvent() can enqueue event
+2. McuInfoApp_Run() can forward event to CommandManager
+3. CommandManager_PostEvent() can enqueue pending event
+4. ProtocolManager_Process() can fetch pending event
+5. ProtocolManager sends EVENT frame
+6. PC event listener can parse EVENT frame
+7. Event RingBuffer high watermark can be observed
+8. Event queue full condition increments drop counter
+```
+
+### 18.5 可靠性测试
 
 ```text
 1. SEQ matches request and response
@@ -840,9 +1050,9 @@ DMA 测试：
 
 ---
 
-## 17. Stage 2 Acceptance Criteria
+## 19. Stage 2 Acceptance Criteria
 
-Stage 2 第一阶段完成标准：
+Stage 2 V1 完成标准：
 
 ```text
 1. UART RX DMA can receive continuous bytes
@@ -850,9 +1060,14 @@ Stage 2 第一阶段完成标准：
 3. Frame parser can recover valid frames from byte stream
 4. CRC16 can detect corrupted frames
 5. PING / GET_VERSION / GET_STATUS work
-6. PC Python tool can send commands and parse responses
-7. Half packet / sticky packet / garbage bytes can be handled
-8. Protocol statistics can be printed or queried
+6. McuInfoApp can handle PC query commands
+7. McuInfoApp can post internal events
+8. CommandManager can cache pending events
+9. ProtocolManager can send EVENT frames
+10. PC Python tool can send commands and parse responses
+11. PC Python event listener can receive EVENT frames
+12. Half packet / sticky packet / garbage bytes can be handled
+13. Protocol statistics can be printed or queried
 ```
 
 Stage 2 增强阶段完成标准：
@@ -867,7 +1082,7 @@ Stage 2 增强阶段完成标准：
 
 ---
 
-## 18. Design Rules
+## 20. Design Rules
 
 后续实现中遵循以下规则：
 
@@ -876,17 +1091,25 @@ Stage 2 增强阶段完成标准：
 2. DMA callback 只搬运数据或记录事件
 3. 协议解析在主循环或 ProtocolManager_Process 中执行
 4. Parser 不直接执行命令
-5. Command Manager 不直接操作 UART
-6. 所有错误必须有计数器
-7. 所有 buffer 必须有 high watermark 和 overflow 统计
-8. 所有可靠性机制必须可关闭或分阶段启用
-9. 所有测试宏默认安全关闭
-10. 每个小闭环完成后提交一次 Git
+5. ProtocolFrame 不定义业务命令
+6. ProtocolManager 不处理业务命令
+7. CommandManager 不直接操作 UART
+8. CommandManager 不直接读取 Platform 数据
+9. McuInfoApp 是 MCU 与 PC 信息交互中心
+10. 其他 App 不直接调用 CommandManager / ProtocolManager
+11. 其他 App 通过 McuInfoApp_PostEvent / UpdateSnapshot 与 PC 间接交互
+12. 所有错误必须有计数器
+13. 所有 buffer 必须有 high watermark 和 overflow 统计
+14. 所有可靠性机制必须可关闭或分阶段启用
+15. 所有测试宏默认安全关闭
+16. 测试代码集成在 app_main.c 中，通过 ENABLE_xxx_TEST 宏控制
+17. 协议热路径尽量减少 printf / BoardLog
+18. 大局部结构体优先放入模块上下文，避免栈压力过大
 ```
 
 ---
 
-## 19. Current Decision
+## 21. Current Decision
 
 当前决策：
 
@@ -897,8 +1120,13 @@ Stage 2 增强阶段完成标准：
 4. 使用 UART DMA circular receive
 5. 使用 half transfer / transfer complete / idle event 处理 DMA 接收
 6. 使用 RingBuffer 解耦 DMA 接收和协议解析
-7. 使用通用状态机框架承载 Frame Parser 和后续升级状态机
-8. 第一版先实现 REQ / RESP / NACK
-9. 第二版加入 ACK / retry
-10. 第三版加入 small sliding window
+7. 使用 RingBuffer 实现 McuInfoApp 内部事件队列
+8. 使用 RingBuffer 实现 CommandManager 待发送 EVENT 队列
+9. 使用通用状态机框架承载 Frame Parser 和后续升级状态机
+10. ProtocolFrame 不定义具体业务命令
+11. CommandManager 只做命令/事件语义管理
+12. McuInfoApp 作为 MCU 信息中枢 App
+13. 第一版实现 REQ / RESP / NACK / EVENT
+14. 第二版加入 ACK / retry
+15. 第三版加入 small sliding window
 ```

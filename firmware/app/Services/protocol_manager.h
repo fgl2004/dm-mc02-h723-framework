@@ -27,16 +27,13 @@ typedef struct
 
     uint32_t frame_received_count;
     uint32_t frame_sent_count;
+    uint32_t event_sent_count;
 
     uint32_t req_frame_count;
     uint32_t resp_frame_count;
     uint32_t nack_frame_count;
+    uint32_t event_frame_count;
     uint32_t other_frame_count;
-
-    uint32_t ping_count;
-    uint32_t get_version_count;
-    uint32_t get_status_count;
-    uint32_t unknown_cmd_count;
 
     uint32_t parser_error_count;
     uint32_t tx_error_count;
@@ -48,6 +45,8 @@ typedef struct
     uint8_t last_rx_cmd;
     uint16_t last_rx_payload_len;
 
+    uint8_t last_tx_type;
+    uint8_t last_tx_cmd;
     uint8_t last_error;
 } ProtocolManagerStats_t;
 

@@ -11,9 +11,10 @@
 #include "state_machine.h"
 #include "uart_rx_consumer.h"
 #include "protocol_frame.h"
+#include "command_manager.h"
 #include "protocol_manager.h"
+#include "mcu_info_app.h"
 
-#include "main.h"
 
 #include <stdio.h>
 
@@ -43,6 +44,8 @@
 
 #define ENABLE_PROTOCOL_MANAGER_TEST     1
 
+#define ENABLE_MCU_INFO_APP_EVENT_TEST     1
+
 static PlatformResetInfo_t g_reset_info;
 
 typedef enum
@@ -69,6 +72,23 @@ typedef struct
 
 static AppTestStateMachineCtx_t g_sm_test_ctx;
 
+static void App_RunMcuInfoEventTest(void)
+{
+#if ENABLE_MCU_INFO_APP_EVENT_TEST
+    static uint8_t posted = 0U;
+    static const uint8_t test_payload[] = { 'T', 'E', 'S', 'T' };
+
+    if ((posted == 0U) && (PlatformTime_GetMs() > 3000U))
+    {
+        posted = 1U;
+
+        (void)McuInfoApp_PostEvent(MCU_INFO_APP_ID_USER,
+                                   MCU_INFO_EVENT_APP_MESSAGE,
+                                   test_payload,
+                                   (uint16_t)sizeof(test_payload));
+    }
+#endif
+}
 static void App_TestProtocolFrame(void)
 {
     int ret;
@@ -526,6 +546,8 @@ void App_Init(void)
     App_TestProtocolFrame();
 #endif
 #if ENABLE_PROTOCOL_MANAGER_TEST
+    McuInfoApp_Init();
+    CommandManager_Init();
     ProtocolManager_Init();
 #endif
     printf("========================================\r\n");
@@ -535,10 +557,13 @@ void App_Run(void)
 {
 #if ENABLE_UART_RX_SLOW_FAST_TEST
         UartRxConsumer_Run();
-#endif
+#endif 
+				App_RunMcuInfoEventTest();
 #if ENABLE_PROTOCOL_MANAGER_TEST
+        McuInfoApp_Run();
         ProtocolManager_Process();
 #endif
+       
         App_ReportUartRxStatsPeriodically();
 
         App_RunSoftwareResetTest();
