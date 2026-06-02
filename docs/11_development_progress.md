@@ -429,10 +429,10 @@ UART Reliable Protocol 采用分阶段升级路线。
 | CRC16                         | Done | CRC16-CCITT-FALSE，用于基础通信校验                                      |
 | UART RX Stats Snapshot | Done | MCU side exposes RX DMA and RingBuffer runtime statistics |
 | UART RX Stats Report | Done | MCU periodically outputs `@UARTSTAT` telemetry line |
-| PC UART Monitor Tool | Not Started | Python tool parses `@UARTSTAT` and displays runtime metrics |
-| PC UART Stress Tool | Not Started | Python tool sends special byte patterns and burst data |
-| UART RX Visualization | Not Started | Plot RingBuffer available / high watermark / overflow / rx rate |
-| UART RX Robustness Matrix | Not Started | Test half DMA, full DMA, wraparound, idle gap, overflow and random stream |
+| PC UART Monitor Tool | Done | Python tool parses `@UARTSTAT` and displays runtime metrics |
+| PC UART Stress Tool | Done | Python tool sends special byte patterns and burst data |
+| UART RX Visualization | Done | Plot RingBuffer available / high watermark / overflow / rx rate |
+| UART RX Robustness Matrix | Done | Test half DMA, full DMA, wraparound, idle gap, overflow and random stream |
 | Frame Parser                  | Not Started | 从字节流解析完整协议帧                                                     |
 | Parser Error Recovery         | Not Started | 支持半包、粘包、垃圾字节、CRC 错误恢复                                           |
 | Protocol Frame Module         | Not Started | 协议帧编码/解码结构体与工具函数                                                |
@@ -669,7 +669,7 @@ Stage 2 增强阶段完成标准：
 Current status:
 
 ```text
-Stage 2.5.1: UART RX Observability and Stats Report
+Stage 2.5: UART RX monitoring and stress validation completed.
 ```
 
 Completed:
@@ -685,12 +685,22 @@ State transition / dispatch / statistics test
 PlatformUart_GetRxSnapshot()
 @UARTSTAT periodic telemetry line
 Non-blocking UART RX RingBuffer consumer
+
+- PC UART UI framework
+- Serial connect / disconnect
+- @UARTSTAT live monitoring
+- RingBuffer gauge visualization
+- TX stress pattern generator
+- Chunk + Interval rate control
+- MCU RX consumer
+- Counter pattern checker
+- Consumer-limited buffer accumulation test
 ```
 
 Next step:
 
 ```text
-Stage 2.5.2: PC UART Monitor Tool
+Stage 2.6: UART frame format and parser.
 ```
 
 Planned output:

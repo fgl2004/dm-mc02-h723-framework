@@ -7,6 +7,7 @@
 #include "ring_buffer.h"
 #include "crc16.h"
 #include "state_machine.h"
+#include "uart_rx_consumer.h"
 
 #include "main.h"
 
@@ -30,7 +31,7 @@
 
 #define ENABLE_UART_RX_DUMP_TEST       0
 #define ENABLE_UART_RX_STATS_REPORT    1
-#define UART_RX_STATS_PERIOD_MS        200U
+#define UART_RX_STATS_PERIOD_MS        100U
 
 static PlatformResetInfo_t g_reset_info;
 
@@ -95,6 +96,7 @@ static void App_ReportUartRxStatsPeriodically(void)
     static uint32_t last_report_ms = 0U;
     uint32_t now;
     PlatformUartRxSnapshot_t s;
+    const UartRxConsumerStats_t *c;
 
     now = PlatformTime_GetMs();
 
@@ -106,12 +108,9 @@ static void App_ReportUartRxStatsPeriodically(void)
     last_report_ms = now;
 
     PlatformUart_GetRxSnapshot(&s);
+    c = UartRxConsumer_GetStats();
 
-    /*
-     * This line is designed for PC-side parser.
-     * Keep the prefix and key names stable.
-     */
-    printf("@UARTSTAT,t=%lu,rx_bytes=%lu,avail=%u,free=%u,rb_write=%lu,rb_read=%lu,overflow=%lu,rb_overflow=%lu,high=%u,half=%lu,full=%lu,idle=%lu,err=%lu\r\n",
+    printf("@UARTSTAT,t=%lu,rx_bytes=%lu,avail=%u,free=%u,rb_write=%lu,rb_read=%lu,overflow=%lu,rb_overflow=%lu,high=%u,half=%lu,full=%lu,idle=%lu,err=%lu,consumer_mode=%lu,consumer_read=%lu,consumer_mismatch=%lu,consumer_drop=%lu,consumer_expected=%u,consumer_last_actual=%u,consumer_last_expected=%u\r\n",
            now,
            s.rx_bytes,
            s.rx_ring_available,
@@ -124,7 +123,14 @@ static void App_ReportUartRxStatsPeriodically(void)
            s.rx_half_count,
            s.rx_full_count,
            s.rx_idle_count,
-           s.rx_error_count);
+           s.rx_error_count,
+           c->mode,
+           c->read_bytes,
+           c->mismatch_count,
+           c->estimated_drop_bytes,
+           c->expected_counter,
+           c->last_actual,
+           c->last_expected);
 #endif
 }
 
@@ -459,10 +465,11 @@ void App_Init(void)
         BoardLog_Error("UART RX DMA start failed\r\n");
     }
 
+    
     PlatformReset_Capture(&g_reset_info);
     PlatformReset_PrintInfo(&g_reset_info);
     PlatformReset_ClearFlags();
-
+    UartRxConsumer_Init();
     App_PrintClockInfo();
     App_PrintTickTest();
 
@@ -487,11 +494,11 @@ void App_Init(void)
 
 void App_Run(void)
 {
-		App_ProcessUartRxTest();
-		App_ReportUartRxStatsPeriodically();
+        UartRxConsumer_Run();
+        App_ReportUartRxStatsPeriodically();
 
-    App_RunSoftwareResetTest();
-    App_RunHardFaultTest();
+        App_RunSoftwareResetTest();
+        App_RunHardFaultTest();
 
 		App_PrintUptimePeriodically();
 }
