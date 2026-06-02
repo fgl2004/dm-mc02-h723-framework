@@ -4,6 +4,8 @@
 #include "platform_uart.h"
 #include "platform_reset.h"
 #include "board_log.h"
+#include "ring_buffer.h"
+
 
 #include "main.h"
 
@@ -15,9 +17,70 @@
 #define ENABLE_HARDFAULT_TEST        0
 #define HARDFAULT_TEST_DELAY_MS      5000U
 
-#define ENABLE_DWT_TEST              0
+#define ENABLE_DWT_TEST              1
+
+#define ENABLE_RING_BUFFER_TEST      1
 
 static PlatformResetInfo_t g_reset_info;
+
+static void App_TestRingBuffer(void)
+{
+    static uint8_t rb_mem[8];
+    RingBuffer_t rb;
+
+    uint8_t input1[] = {1, 2, 3, 4, 5};
+    uint8_t input2[] = {6, 7, 8, 9};
+    uint8_t out[8];
+    uint16_t written;
+    uint16_t read_len;
+    const RingBufferStats_t *stats;
+
+    RingBuffer_Init(&rb, rb_mem, sizeof(rb_mem));
+
+    BoardLog_PrintSeparator();
+    BoardLog_Info("RingBuffer Test Start\r\n");
+
+    written = RingBuffer_Write(&rb, input1, sizeof(input1));
+    BoardLog_Info("Write input1: written=%u, available=%u, free=%u\r\n",
+                  written,
+                  RingBuffer_Available(&rb),
+                  RingBuffer_Free(&rb));
+
+    read_len = RingBuffer_Read(&rb, out, 3U);
+    BoardLog_Info("Read 3 bytes: read=%u, data=%u %u %u, available=%u, free=%u\r\n",
+                  read_len,
+                  out[0],
+                  out[1],
+                  out[2],
+                  RingBuffer_Available(&rb),
+                  RingBuffer_Free(&rb));
+
+    written = RingBuffer_Write(&rb, input2, sizeof(input2));
+    BoardLog_Info("Write input2: written=%u, available=%u, free=%u\r\n",
+                  written,
+                  RingBuffer_Available(&rb),
+                  RingBuffer_Free(&rb));
+
+    read_len = RingBuffer_Read(&rb, out, sizeof(out));
+    BoardLog_Info("Read all: read=%u\r\n", read_len);
+
+    for (uint16_t i = 0U; i < read_len; i++)
+    {
+        BoardLog_Info("  out[%u]=%u\r\n", i, out[i]);
+    }
+
+    written = RingBuffer_Write(&rb, input1, sizeof(input1));
+    written += RingBuffer_Write(&rb, input2, sizeof(input2));
+
+    stats = RingBuffer_GetStats(&rb);
+
+    BoardLog_Info("Overflow test: available=%u, overflow=%lu, high_watermark=%u\r\n",
+                  RingBuffer_Available(&rb),
+                  stats->overflow_count,
+                  stats->high_watermark);
+
+    BoardLog_Info("RingBuffer Test End\r\n");
+}
 
 static void App_PrintClockInfo(void)
 {
@@ -81,6 +144,10 @@ void App_Init(void)
 #if ENABLE_DWT_TEST
     PlatformTime_PrintStatus();
     PlatformTime_RunDwtTest();
+#endif
+	
+#if ENABLE_RING_BUFFER_TEST
+    App_TestRingBuffer();
 #endif
 
     printf("========================================\r\n");

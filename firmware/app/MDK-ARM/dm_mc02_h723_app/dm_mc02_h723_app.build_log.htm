@@ -27,30 +27,30 @@ Project File Date:  06/02/2026
 <h2>Output:</h2>
 *** Using Compiler 'V6.15', folder: 'D:\KEIL\ARM\ARMCLANG\Bin'
 Build target 'dm_mc02_h723_app'
-../App/app_main.c(26): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../App/app_main.c(87): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  SYSCLK = %lu Hz\r\n", HAL_RCC_GetSysClockFreq());
                        ~~~          ^~~~~~~~~~~~~~~~~~~~~~~~~
                        %u
-../App/app_main.c(27): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../App/app_main.c(88): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  HCLK   = %lu Hz\r\n", HAL_RCC_GetHCLKFreq());
                        ~~~          ^~~~~~~~~~~~~~~~~~~~~
                        %u
-../App/app_main.c(28): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../App/app_main.c(89): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  PCLK1  = %lu Hz\r\n", HAL_RCC_GetPCLK1Freq());
                        ~~~          ^~~~~~~~~~~~~~~~~~~~~~
                        %u
-../App/app_main.c(29): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../App/app_main.c(90): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  PCLK2  = %lu Hz\r\n", HAL_RCC_GetPCLK2Freq());
                        ~~~          ^~~~~~~~~~~~~~~~~~~~~~
                        %u
-../App/app_main.c(36): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
+../App/app_main.c(97): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
     printf("  HAL_GetTick = %lu ms\r\n", PlatformTime_GetMs());
                             ~~~          ^~~~~~~~~~~~~~~~~~~~
                             %u
 5 warnings generated.
 compiling app_main.c...
 linking...
-Program Size: Code=20992 RO-data=2216 RW-data=20 ZI-data=1188  
+Program Size: Code=22544 RO-data=2416 RW-data=20 ZI-data=1196  
 FromELF: creating hex file...
 "dm_mc02_h723_app\dm_mc02_h723_app.axf" - 0 Error(s), 5 Warning(s).
 
