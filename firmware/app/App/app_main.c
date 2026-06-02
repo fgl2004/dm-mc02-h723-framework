@@ -5,7 +5,7 @@
 #include "platform_reset.h"
 #include "board_log.h"
 #include "ring_buffer.h"
-
+#include "crc16.h"
 
 #include "main.h"
 
@@ -17,12 +17,35 @@
 #define ENABLE_HARDFAULT_TEST        0
 #define HARDFAULT_TEST_DELAY_MS      5000U
 
-#define ENABLE_DWT_TEST              1
+#define ENABLE_DWT_TEST              0
 
-#define ENABLE_RING_BUFFER_TEST      1
+#define ENABLE_RING_BUFFER_TEST      0
+
+#define ENABLE_CRC16_TEST            1
 
 static PlatformResetInfo_t g_reset_info;
+static void App_TestCrc16(void)
+{
+    uint8_t passed;
+    uint16_t crc;
 
+    static const uint8_t test_data[] = {
+        '1', '2', '3', '4', '5', '6', '7', '8', '9'
+    };
+
+    BoardLog_PrintSeparator();
+    BoardLog_Info("CRC16 Test Start\r\n");
+
+    crc = Crc16_CcittFalse(test_data, (uint16_t)sizeof(test_data));
+    passed = Crc16_SelfTest();
+
+    BoardLog_Info("CRC16-CCITT-FALSE test data: 123456789\r\n");
+    BoardLog_Info("CRC16 result = 0x%04X\r\n", crc);
+    BoardLog_Info("Expected     = 0x29B1\r\n");
+    BoardLog_Info("Self test    = %s\r\n", passed ? "PASS" : "FAIL");
+
+    BoardLog_Info("CRC16 Test End\r\n");
+}
 static void App_TestRingBuffer(void)
 {
     static uint8_t rb_mem[8];
@@ -148,6 +171,10 @@ void App_Init(void)
 	
 #if ENABLE_RING_BUFFER_TEST
     App_TestRingBuffer();
+#endif
+
+#if ENABLE_CRC16_TEST
+    App_TestCrc16();
 #endif
 
     printf("========================================\r\n");
