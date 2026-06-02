@@ -23,13 +23,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "platform_time.h"
-#include "platform_uart.h"
-#include "platform_reset.h"
-#include "board_log.h"
 
-#include <stdio.h>
-#include <string.h>
+#include "app_main.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,13 +37,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ENABLE_SOFTWARE_RESET_TEST   0
-#define SOFTWARE_RESET_DELAY_MS      5000
 
-#define ENABLE_HARDFAULT_TEST        0
-#define HARDFAULT_TEST_DELAY_MS      5000
-
-#define ENABLE_DWT_TEST              1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,7 +48,7 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static PlatformResetInfo_t g_reset_info;
+
 
 
 
@@ -73,15 +63,7 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void Print_ClockInfo(void)
-{
-    printf("----------------------------------------\r\n");
-    printf(" Clock Info:\r\n");
-    printf("  SYSCLK = %lu Hz\r\n", HAL_RCC_GetSysClockFreq());
-    printf("  HCLK   = %lu Hz\r\n", HAL_RCC_GetHCLKFreq());
-    printf("  PCLK1  = %lu Hz\r\n", HAL_RCC_GetPCLK1Freq());
-    printf("  PCLK2  = %lu Hz\r\n", HAL_RCC_GetPCLK2Freq());
-}
+
 /* USER CODE END 0 */
 
 /**
@@ -115,27 +97,7 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 /* USER CODE BEGIN 2 */
-  PlatformUart_Init();
-  PlatformTime_Init();
-  BoardLog_Init();
-  BoardLog_PrintBootBanner();
-
-  PlatformReset_Capture(&g_reset_info);
-  PlatformReset_PrintInfo(&g_reset_info);
-  PlatformReset_ClearFlags();
-	
-  Print_ClockInfo();
-
-  printf("----------------------------------------\r\n");
-  printf(" Tick Test:\r\n");
-  printf("  HAL_GetTick = %lu ms\r\n", PlatformTime_GetMs());
-
-  #if ENABLE_DWT_TEST
-  PlatformTime_PrintStatus();
-  PlatformTime_RunDwtTest();
-  #endif
-
-printf("========================================\r\n");
+  App_Init();
 /* USER CODE END 2 */
   /* USER CODE END 2 */
 
@@ -143,31 +105,11 @@ printf("========================================\r\n");
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+     App_Run();
     /* USER CODE END WHILE */
-    printf("[BOOT] uptime = %lu ms\r\n", PlatformTime_GetMs());
-
-#if ENABLE_SOFTWARE_RESET_TEST
-    if ((PlatformReset_IsSoftwareReset(&g_reset_info) == 0U) &&
-        (PlatformTime_GetMs() > SOFTWARE_RESET_DELAY_MS))
-    {
-        printf("[RESET_TEST] Trigger software reset by NVIC_SystemReset()\r\n");
-        PlatformTime_DelayMs(100);
-        PlatformReset_SoftwareReset();
-    }
-#endif
-		
-#if ENABLE_HARDFAULT_TEST
-    if (PlatformTime_GetMs() > HARDFAULT_TEST_DELAY_MS)
-    {
-        printf("[FAULT_TEST] Trigger HardFault test\r\n");
-        PlatformTime_DelayMs(100);
-
-        volatile uint32_t *bad_addr = (uint32_t *)0xFFFFFFFFU;
-        *bad_addr = 0x12345678U;
-    }
-#endif
-    PlatformTime_DelayMs(1000);
+   
     /* USER CODE BEGIN 3 */
+
   }
   /* USER CODE END 3 */
 }
