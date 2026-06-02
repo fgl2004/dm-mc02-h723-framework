@@ -425,7 +425,7 @@ UART Reliable Protocol 采用分阶段升级路线。
 | UART IDLE 处理                  | Not Started | 处理不定长帧和空闲事件                                                     |
 | RX RingBuffer                 | Done | 解耦 DMA 接收与协议解析                                                  |
 | RingBuffer 统计                 | Done | overflow、high watermark、read/write bytes                        |
-| Generic State Machine         | Not Started | 通用状态机框架，用于 Frame Parser 和后续模块                                   |
+| Generic State Machine         | Done | 通用状态机框架，用于 Frame Parser 和后续模块                                   |
 | CRC16                         | Done | CRC16-CCITT-FALSE，用于基础通信校验                                      |
 | Frame Parser                  | Not Started | 从字节流解析完整协议帧                                                     |
 | Parser Error Recovery         | Not Started | 支持半包、粘包、垃圾字节、CRC 错误恢复                                           |
@@ -663,7 +663,7 @@ Stage 2 增强阶段完成标准：
 Current status:
 
 ```text
-Stage 2.3: CRC16 Middleware
+Stage 2.4: Generic State Machine Middleware
 ```
 
 Completed:
@@ -674,12 +674,14 @@ RingBuffer read/write/wraparound test
 RingBuffer overflow and high watermark statistics
 CRC16 middleware
 CRC16-CCITT-FALSE standard test vector
+Generic state machine middleware
+State transition / dispatch / statistics test
 ```
 
 Next step:
 
 ```text
-Stage 2.3: Stage 2.4: Generic State Machine Middleware
+Stage 2.5: UART DMA RX Path
 ```
 
 Planned output:

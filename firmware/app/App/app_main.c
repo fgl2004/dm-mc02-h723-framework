@@ -6,6 +6,7 @@
 #include "board_log.h"
 #include "ring_buffer.h"
 #include "crc16.h"
+#include "state_machine.h"
 
 #include "main.h"
 
@@ -21,9 +22,214 @@
 
 #define ENABLE_RING_BUFFER_TEST      0
 
-#define ENABLE_CRC16_TEST            1
+#define ENABLE_CRC16_TEST            0
+
+#define ENABLE_STATE_MACHINE_TEST    0
 
 static PlatformResetInfo_t g_reset_info;
+
+typedef enum
+{
+    APP_TEST_STATE_IDLE = 0,
+    APP_TEST_STATE_RUNNING,
+    APP_TEST_STATE_ERROR
+} AppTestState_t;
+
+typedef enum
+{
+    APP_TEST_EVENT_START = 1,
+    APP_TEST_EVENT_STOP,
+    APP_TEST_EVENT_ERROR
+} AppTestEvent_t;
+
+typedef struct
+{
+    StateMachine_t sm;
+    uint32_t enter_idle_count;
+    uint32_t enter_running_count;
+    uint32_t enter_error_count;
+} AppTestStateMachineCtx_t;
+
+static AppTestStateMachineCtx_t g_sm_test_ctx;
+
+static void AppTest_OnEnterIdle(void *ctx)
+{
+    AppTestStateMachineCtx_t *test_ctx = (AppTestStateMachineCtx_t *)ctx;
+
+    if (test_ctx != NULL)
+    {
+        test_ctx->enter_idle_count++;
+    }
+
+    BoardLog_Info("StateMachine: enter IDLE\r\n");
+}
+
+static void AppTest_OnEnterRunning(void *ctx)
+{
+    AppTestStateMachineCtx_t *test_ctx = (AppTestStateMachineCtx_t *)ctx;
+
+    if (test_ctx != NULL)
+    {
+        test_ctx->enter_running_count++;
+    }
+
+    BoardLog_Info("StateMachine: enter RUNNING\r\n");
+}
+
+static void AppTest_OnEnterError(void *ctx)
+{
+    AppTestStateMachineCtx_t *test_ctx = (AppTestStateMachineCtx_t *)ctx;
+
+    if (test_ctx != NULL)
+    {
+        test_ctx->enter_error_count++;
+    }
+
+    BoardLog_Info("StateMachine: enter ERROR\r\n");
+}
+
+static int AppTest_IdleOnEvent(void *ctx, EventId_t event, const void *event_data)
+{
+    (void)event_data;
+
+    AppTestStateMachineCtx_t *test_ctx = (AppTestStateMachineCtx_t *)ctx;
+
+    if (test_ctx == NULL)
+    {
+        return STATE_MACHINE_INVALID_PARAM;
+    }
+
+    if (event == APP_TEST_EVENT_START)
+    {
+        return StateMachine_Transition(&test_ctx->sm,
+                                       APP_TEST_STATE_RUNNING,
+                                       PlatformTime_GetMs());
+    }
+
+    if (event == APP_TEST_EVENT_ERROR)
+    {
+        return StateMachine_Transition(&test_ctx->sm,
+                                       APP_TEST_STATE_ERROR,
+                                       PlatformTime_GetMs());
+    }
+
+    return STATE_MACHINE_OK;
+}
+
+static int AppTest_RunningOnEvent(void *ctx, EventId_t event, const void *event_data)
+{
+    (void)event_data;
+
+    AppTestStateMachineCtx_t *test_ctx = (AppTestStateMachineCtx_t *)ctx;
+
+    if (test_ctx == NULL)
+    {
+        return STATE_MACHINE_INVALID_PARAM;
+    }
+
+    if (event == APP_TEST_EVENT_STOP)
+    {
+        return StateMachine_Transition(&test_ctx->sm,
+                                       APP_TEST_STATE_IDLE,
+                                       PlatformTime_GetMs());
+    }
+
+    if (event == APP_TEST_EVENT_ERROR)
+    {
+        return StateMachine_Transition(&test_ctx->sm,
+                                       APP_TEST_STATE_ERROR,
+                                       PlatformTime_GetMs());
+    }
+
+    return STATE_MACHINE_OK;
+}
+
+static int AppTest_ErrorOnEvent(void *ctx, EventId_t event, const void *event_data)
+{
+    (void)event_data;
+
+    AppTestStateMachineCtx_t *test_ctx = (AppTestStateMachineCtx_t *)ctx;
+
+    if (test_ctx == NULL)
+    {
+        return STATE_MACHINE_INVALID_PARAM;
+    }
+
+    if (event == APP_TEST_EVENT_STOP)
+    {
+        return StateMachine_Transition(&test_ctx->sm,
+                                       APP_TEST_STATE_IDLE,
+                                       PlatformTime_GetMs());
+    }
+
+    return STATE_MACHINE_OK;
+}
+
+static const StateDef_t g_app_test_state_table[] =
+{
+    {
+        APP_TEST_STATE_IDLE,
+        AppTest_OnEnterIdle,
+        NULL,
+        AppTest_IdleOnEvent
+    },
+    {
+        APP_TEST_STATE_RUNNING,
+        AppTest_OnEnterRunning,
+        NULL,
+        AppTest_RunningOnEvent
+    },
+    {
+        APP_TEST_STATE_ERROR,
+        AppTest_OnEnterError,
+        NULL,
+        AppTest_ErrorOnEvent
+    }
+};
+
+static void App_TestStateMachine(void)
+{
+    int ret;
+
+    BoardLog_PrintSeparator();
+    BoardLog_Info("StateMachine Test Start\r\n");
+
+    ret = StateMachine_Init(&g_sm_test_ctx.sm,
+                            g_app_test_state_table,
+                            (uint16_t)(sizeof(g_app_test_state_table) / sizeof(g_app_test_state_table[0])),
+                            APP_TEST_STATE_IDLE,
+                            &g_sm_test_ctx,
+                            PlatformTime_GetMs());
+
+    BoardLog_Info("StateMachine init ret=%d, state=%u\r\n",
+                  ret,
+                  StateMachine_GetState(&g_sm_test_ctx.sm));
+
+    StateMachine_Dispatch(&g_sm_test_ctx.sm, APP_TEST_EVENT_START, NULL);
+    BoardLog_Info("After START: state=%u\r\n",
+                  StateMachine_GetState(&g_sm_test_ctx.sm));
+
+    StateMachine_Dispatch(&g_sm_test_ctx.sm, APP_TEST_EVENT_ERROR, NULL);
+    BoardLog_Info("After ERROR: state=%u\r\n",
+                  StateMachine_GetState(&g_sm_test_ctx.sm));
+
+    StateMachine_Dispatch(&g_sm_test_ctx.sm, APP_TEST_EVENT_STOP, NULL);
+    BoardLog_Info("After STOP: state=%u\r\n",
+                  StateMachine_GetState(&g_sm_test_ctx.sm));
+
+    BoardLog_Info("transition_count=%lu, dispatch_count=%lu, error_count=%lu\r\n",
+                  StateMachine_GetTransitionCount(&g_sm_test_ctx.sm),
+                  StateMachine_GetDispatchCount(&g_sm_test_ctx.sm),
+                  StateMachine_GetErrorCount(&g_sm_test_ctx.sm));
+
+    BoardLog_Info("enter_idle=%lu, enter_running=%lu, enter_error=%lu\r\n",
+                  g_sm_test_ctx.enter_idle_count,
+                  g_sm_test_ctx.enter_running_count,
+                  g_sm_test_ctx.enter_error_count);
+
+    BoardLog_Info("StateMachine Test End\r\n");
+}
+
 static void App_TestCrc16(void)
 {
     uint8_t passed;
@@ -177,6 +383,9 @@ void App_Init(void)
     App_TestCrc16();
 #endif
 
+#if ENABLE_STATE_MACHINE_TEST
+    App_TestStateMachine();
+#endif
     printf("========================================\r\n");
 }
 

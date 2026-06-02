@@ -34,6 +34,7 @@
 "dm_mc02_h723_app\app_main.o"
 "dm_mc02_h723_app\ring_buffer.o"
 "dm_mc02_h723_app\crc16.o"
+"dm_mc02_h723_app\state_machine.o"
 --library_type=microlib --strict --scatter "dm_mc02_h723_app\dm_mc02_h723_app.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers
