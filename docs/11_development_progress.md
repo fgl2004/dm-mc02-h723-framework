@@ -163,6 +163,8 @@ DWT Cycle Counter 可用于性能测量
 
 ### 6.2 Planned Tasks
 
+### 6.2 Planned Tasks
+
 | 任务                            | 状态       | 说明                                                                                     |
 | ----------------------------- | -------- | -------------------------------------------------------------------------------------- |
 | CubeMX 创建 STM32H723VGT6 工程    | Done     | 建立基础 app 工程                                                                            |
@@ -185,9 +187,14 @@ DWT Cycle Counter 可用于性能测量
 | Platform Reset Module         | Done     | Reset flag capture, primary reset cause and software reset wrapped by `platform_reset` |
 | Platform Fault Module         | Done     | HardFault capture and fault decode wrapped by `platform_fault`                         |
 | Board Log Module              | Done     | Boot banner and INFO/WARN/ERROR output wrapped by `board_log`                          |
-| Git 提交基础工程                    | Done     | 提交到 `feature/board-bringup`                                                            |
+| App Layer Skeleton            | Done     | `App_Init()` / `App_Run()` created in `App/app_main.c`                                 |
+| main.c Cleanup                | Done     | `main.c` reduced to HAL init, CubeMX init, `App_Init()` and `App_Run()`                |
+| Git 提交基础工程                    | Done     | 基础工程已提交到 `feature/board-bringup`                                                       |
+| Git 提交 Platform/BSP 模块化       | Done  | 待提交 `platform_time`、`platform_uart`、`platform_reset`、`platform_fault`、`board_log`      |
+| Git 提交 App 层骨架                | Done  | 待提交 `App/app_main.c`、`App/app_main.h` 和 `main.c` 清理                                    |
 | LED / GPIO 测试                 | Deferred | 当前板卡无明显用户 LED，暂缓                                                                       |
 | Timer GPIO Toggle             | Deferred | 后续确认可用 GPIO 后再做物理频率验证                                                                  |
+
 
 ---
 
@@ -362,33 +369,329 @@ App_Run();
 
 ### 7.1 Stage Goal
 
-建立 PC 与 MCU 的可靠通信通道。
+建立 PC 与 MCU 之间的可靠 UART 通信通道。
 
-### 7.2 Planned Tasks
+Stage 2 不只是实现简单串口收发，而是要在 Stage 1 已完成的 USART1 生命线基础上，构建一个可扩展、可诊断、可测试、可逐步增强的通信协议框架。
 
-| 任务                 | 状态          | 说明                   |
-| ------------------ | ----------- | -------------------- |
-| UART DMA + IDLE 接收 | Not Started | H7 需要特别关注 Cache      |
-| RX RingBuffer      | Not Started | 字节流缓冲                |
-| Frame Parser       | Not Started | 帧头、长度、CRC            |
-| CRC16              | Not Started | 基础通信校验               |
-| PING 命令            | Not Started | 最小通信闭环               |
-| GET_VERSION 命令     | Not Started | 查询固件信息               |
-| GET_STATUS 命令      | Not Started | 查询系统状态               |
-| Python PC Tool     | Not Started | `h7tool ping/status` |
-| 协议压力测试             | Not Started | 半包、粘包、CRC 错误         |
-
-### 7.3 Acceptance Criteria
+该阶段重点包括：
 
 ```text
-1. PC 能稳定 ping MCU
-2. 连续 ping 10000 次无死机
-3. 错误 CRC 帧被拒绝
-4. 半包超时后能恢复
-5. 粘包能连续解析
-6. 超长帧不会导致 buffer 越界
-7. 通信错误有计数器
+UART DMA 高效接收
+RingBuffer 字节流缓存
+通用状态机框架
+二进制协议帧
+CRC16 校验
+Frame Parser
+Protocol Manager
+Command Manager
+基础命令闭环
+Python PC Tool
+半包 / 粘包 / 错包 / 垃圾字节恢复
+后续 ACK / NACK / 重传 / 滑动窗口扩展
 ```
+
+Stage 2 的核心目标是：
+
+> 把 UART 从“调试输出通道”升级为“可靠命令与数据通信通道”。
+
+---
+
+### 7.2 Protocol Evolution Plan
+
+UART Reliable Protocol 采用分阶段升级路线。
+
+| Version | 目标                              | 说明                                  |
+| ------- | ------------------------------- | ----------------------------------- |
+| V1      | Reliable Frame + CRC + REQ/RESP | 先实现帧边界、长度、CRC、基础请求响应                |
+| V2      | SEQ + ACK/NACK + Timeout Retry  | 加入序号、确认、超时、重传、去重                    |
+| V3      | Small Sliding Window            | 加入小窗口机制，提高连续数据传输效率                  |
+| V4      | Fragment / File Transfer        | 支持参数导入导出、日志上传、固件分片传输                |
+| V5      | Security Extension              | 支持 HMAC、Challenge-Response、防重放、加密预留 |
+
+当前 Stage 2 第一阶段以 V1 为主，同时在协议字段中预留 V2/V3/V4/V5 的升级空间。
+
+---
+
+### 7.3 Planned Tasks
+
+| 任务                            | 状态          | 说明                                                              |
+| ----------------------------- | ----------- | --------------------------------------------------------------- |
+| UART Reliable Protocol Design | Done        | 已创建 `docs/04_uart_reliable_protocol_design.md`                  |
+| Protocol Frame Format         | Designed    | 使用 SOF + VER + TYPE + FLAGS + SEQ + CMD + LEN + PAYLOAD + CRC16 |
+| Protocol Evolution Roadmap    | Designed    | 预留 ACK/NACK、重传、小滑动窗口、分片、安全扩展                                    |
+| UART DMA + IDLE 接收            | Not Started | H7 需要特别关注 D-Cache 与 DMA 一致性                                     |
+| DMA Half Transfer 处理          | Not Started | DMA 写满前半区后搬运数据到 RX RingBuffer                                   |
+| DMA Transfer Complete 处理      | Not Started | DMA 写满后半区后搬运数据到 RX RingBuffer                                   |
+| UART IDLE 处理                  | Not Started | 处理不定长帧和空闲事件                                                     |
+| RX RingBuffer                 | Not Started | 解耦 DMA 接收与协议解析                                                  |
+| RingBuffer 统计                 | Not Started | overflow、high watermark、read/write bytes                        |
+| Generic State Machine         | Not Started | 通用状态机框架，用于 Frame Parser 和后续模块                                   |
+| CRC16                         | Not Started | CRC16-CCITT-FALSE，用于基础通信校验                                      |
+| Frame Parser                  | Not Started | 从字节流解析完整协议帧                                                     |
+| Parser Error Recovery         | Not Started | 支持半包、粘包、垃圾字节、CRC 错误恢复                                           |
+| Protocol Frame Module         | Not Started | 协议帧编码/解码结构体与工具函数                                                |
+| Protocol Manager              | Not Started | 接收、校验、分发、响应、统计                                                  |
+| Command Manager               | Not Started | 命令注册、参数检查、执行和响应封装                                               |
+| PING 命令                       | Not Started | 最小通信闭环                                                          |
+| GET_VERSION 命令                | Not Started | 查询固件版本信息                                                        |
+| GET_STATUS 命令                 | Not Started | 查询系统状态                                                          |
+| GET_RESET_INFO 命令             | Planned     | 查询 Stage 1 已建立的 reset info                                      |
+| GET_TIME_INFO 命令              | Planned     | 查询 tick / DWT / uptime 信息                                       |
+| Python PC Tool                | Not Started | `h7tool ping/version/status`                                    |
+| 协议压力测试                        | Not Started | 半包、粘包、CRC 错误、垃圾字节、超长帧                                           |
+| ACK / NACK                    | Planned     | V2 可靠性增强                                                        |
+| Timeout Retry                 | Planned     | V2 可靠性增强                                                        |
+| Duplicate Detection           | Planned     | V2 防止重复执行副作用命令                                                  |
+| Small Sliding Window          | Planned     | V3 用于大数据传输和固件升级                                                 |
+| Fragment Transfer             | Planned     | V4 用于固件升级、日志上传、参数导入导出                                           |
+| Security Extension            | Planned     | V5 用于 HMAC、认证、防重放                                               |
+
+---
+
+### 7.4 Planned Module Structure
+
+Stage 2 计划新增以下模块。
+
+```text
+firmware/app/
+├── Middleware/
+│   ├── ring_buffer.h
+│   ├── ring_buffer.c
+│   ├── crc16.h
+│   ├── crc16.c
+│   ├── state_machine.h
+│   ├── state_machine.c
+│   ├── protocol_frame.h
+│   └── protocol_frame.c
+│
+├── Services/
+│   ├── protocol_manager.h
+│   ├── protocol_manager.c
+│   ├── command_manager.h
+│   └── command_manager.c
+│
+├── Platform/
+│   ├── platform_uart.h
+│   └── platform_uart.c
+│
+└── App/
+    ├── app_main.h
+    └── app_main.c
+```
+
+PC 工具计划：
+
+```text
+pc_tool/
+└── h7tool/
+    ├── cli.py
+    ├── protocol.py
+    ├── commands.py
+    ├── serial_backend.py
+    └── tests.py
+```
+
+---
+
+### 7.5 UART RX Architecture
+
+UART 接收计划采用：
+
+```text
+UART RX DMA Circular Mode
+DMA Half Transfer Interrupt
+DMA Transfer Complete Interrupt
+UART IDLE Interrupt
+RX RingBuffer
+Frame Parser
+Protocol Manager
+```
+
+数据流：
+
+```text
+USART1 RX
+  ↓
+DMA Circular Buffer
+  ↓
+Half / Complete / IDLE Event
+  ↓
+RX RingBuffer
+  ↓
+Frame Parser State Machine
+  ↓
+Protocol Manager
+  ↓
+Command Manager
+```
+
+设计原则：
+
+```text
+DMA callback 中只做最少工作
+协议解析不在中断中执行
+RingBuffer 解耦接收和解析
+Parser 从 RingBuffer 中持续取字节
+所有错误必须有计数器
+```
+
+---
+
+### 7.6 Generic State Machine Plan
+
+Stage 2 将引入通用状态机框架：
+
+```text
+Middleware/state_machine.h
+Middleware/state_machine.c
+```
+
+用于支撑：
+
+```text
+Frame Parser State Machine
+Protocol Reliability State Machine
+Future Upgrade State Machine
+Future Security Authentication State Machine
+Device State Machine
+```
+
+Frame Parser 计划状态：
+
+```text
+WAIT_SOF1
+WAIT_SOF2
+READ_HEADER
+READ_PAYLOAD
+READ_CRC
+VERIFY_CRC
+FRAME_READY
+ERROR_RECOVERY
+```
+
+通用状态机框架目标：
+
+```text
+统一状态切换风格
+支持 enter / exit / event handler
+支持状态切换统计
+支持状态停留时间统计
+支持后续诊断查询
+```
+
+---
+
+### 7.7 Protocol Frame Summary
+
+第一版协议帧格式：
+
+```text
++------+-------+-----+------+-------+-----+-----+--------+---------+-------+
+| SOF1 | SOF2  | VER | TYPE | FLAGS | SEQ | CMD | LEN    | PAYLOAD | CRC16 |
+| 0xA5 | 0x5A  | 1B  | 1B   | 1B    | 1B  | 1B  | 2B LE  | N bytes | 2B LE |
++------+-------+-----+------+-------+-----+-----+--------+---------+-------+
+```
+
+CRC 覆盖范围：
+
+```text
+VER + TYPE + FLAGS + SEQ + CMD + LEN + PAYLOAD
+```
+
+不覆盖：
+
+```text
+SOF1
+SOF2
+CRC16 itself
+```
+
+V1 主要使用：
+
+```text
+REQ
+RESP
+NACK
+```
+
+后续扩展：
+
+```text
+ACK
+DATA
+WINDOW_ACK
+EVENT
+```
+
+---
+
+### 7.8 Acceptance Criteria
+
+Stage 2 第一阶段完成标准：
+
+```text
+1. UART RX DMA 可以连续接收字节
+2. DMA Half Transfer / Transfer Complete / IDLE 事件能够正确搬运数据
+3. RX RingBuffer 可以缓存字节流
+4. RingBuffer 具备 overflow 和 high watermark 统计
+5. Frame Parser 可以从字节流中恢复完整帧
+6. CRC16 可以识别错误帧
+7. PING / GET_VERSION / GET_STATUS 可以正常响应
+8. PC Python Tool 可以发送命令并解析响应
+9. 半包场景下 parser 能等待更多数据
+10. 粘包场景下 parser 能连续解析多帧
+11. 垃圾字节不会导致 parser 长期失效
+12. 超长帧不会导致 buffer 越界
+13. 通信错误有计数器
+```
+
+Stage 2 增强阶段完成标准：
+
+```text
+1. SEQ request-response matching works
+2. ACK/NACK frame works
+3. Timeout retry works
+4. Duplicate detection works
+5. Small sliding window design is implemented or partially implemented
+6. Protocol stress test can be automated by PC Tool
+```
+
+---
+
+### 7.9 Current Stage 2 Status
+
+Current status:
+
+```text
+Stage 2.1: Protocol Design
+```
+
+Completed:
+
+```text
+UART reliable protocol design document
+Protocol frame format
+DMA RX architecture plan
+Generic state machine plan
+Reliability upgrade roadmap
+Sliding window extension plan
+```
+
+Next step:
+
+```text
+Stage 2.2: RingBuffer Middleware
+```
+
+Planned output:
+
+```text
+Middleware/ring_buffer.h
+Middleware/ring_buffer.c
+RingBuffer unit-style test through App_Run or temporary test function
+RingBuffer statistics
+```
+
 
 ---
 
