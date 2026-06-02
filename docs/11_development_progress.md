@@ -61,9 +61,9 @@ In Progress
 
 | Stage    | 阶段名称                               | 状态          | 主要目标                          |
 | -------- | ---------------------------------- | ----------- | ----------------------------- |
-| Stage 0  | Repository and Documentation       | In Progress | 建立仓库、目录、README、总纲文档           |
-| Stage 1  | Board Bring-up                     | Not Started | 点亮板子，验证时钟、串口、定时器、复位、HardFault |
-| Stage 2  | UART Reliable Protocol             | Not Started | 建立 PC 与 MCU 的可靠串口通信           |
+| Stage 0  | Repository and Documentation       | Done  | 建立仓库、目录、README、总纲文档           |
+| Stage 1  | Board Bring-up                     | Done  | 点亮板子，验证时钟、串口、定时器、复位、HardFault |
+| Stage 2  | UART Reliable Protocol             | In Progress | 建立 PC 与 MCU 的可靠串口通信           |
 | Stage 3  | Diagnostic Framework               | Not Started | 建立诊断、日志、Trace、Buffer 统计和健康监控  |
 | Stage 4  | IMU and Algorithm Loop             | Not Started | 建立 IMU 数据采集、滤波和算法闭环           |
 | Stage 5  | FDCAN Communication                | Not Started | 建立 FDCAN 通信和诊断能力              |
@@ -423,8 +423,8 @@ UART Reliable Protocol 采用分阶段升级路线。
 | DMA Half Transfer 处理          | Not Started | DMA 写满前半区后搬运数据到 RX RingBuffer                                   |
 | DMA Transfer Complete 处理      | Not Started | DMA 写满后半区后搬运数据到 RX RingBuffer                                   |
 | UART IDLE 处理                  | Not Started | 处理不定长帧和空闲事件                                                     |
-| RX RingBuffer                 | Not Started | 解耦 DMA 接收与协议解析                                                  |
-| RingBuffer 统计                 | Not Started | overflow、high watermark、read/write bytes                        |
+| RX RingBuffer                 | Done | 解耦 DMA 接收与协议解析                                                  |
+| RingBuffer 统计                 | Done | overflow、high watermark、read/write bytes                        |
 | Generic State Machine         | Not Started | 通用状态机框架，用于 Frame Parser 和后续模块                                   |
 | CRC16                         | Not Started | CRC16-CCITT-FALSE，用于基础通信校验                                      |
 | Frame Parser                  | Not Started | 从字节流解析完整协议帧                                                     |
@@ -663,24 +663,21 @@ Stage 2 增强阶段完成标准：
 Current status:
 
 ```text
-Stage 2.1: Protocol Design
+Stage 2.2: RingBuffer Middleware
 ```
 
 Completed:
 
 ```text
-UART reliable protocol design document
-Protocol frame format
-DMA RX architecture plan
-Generic state machine plan
-Reliability upgrade roadmap
-Sliding window extension plan
+RingBuffer middleware
+RingBuffer read/write/wraparound test
+RingBuffer overflow and high watermark statistics
 ```
 
 Next step:
 
 ```text
-Stage 2.2: RingBuffer Middleware
+Stage 2.3: CRC16 Middleware
 ```
 
 Planned output:
