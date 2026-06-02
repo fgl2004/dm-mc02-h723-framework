@@ -1,5 +1,7 @@
 #include "app_main.h"
 
+
+
 #include "platform_time.h"
 #include "platform_uart.h"
 #include "platform_reset.h"
@@ -8,6 +10,8 @@
 #include "crc16.h"
 #include "state_machine.h"
 #include "uart_rx_consumer.h"
+#include "protocol_frame.h"
+
 
 #include "main.h"
 
@@ -30,8 +34,12 @@
 
 
 #define ENABLE_UART_RX_DUMP_TEST       0
-#define ENABLE_UART_RX_STATS_REPORT    1
+#define ENABLE_UART_RX_STATS_REPORT    0
 #define UART_RX_STATS_PERIOD_MS        100U
+
+#define ENABLE_UART_RX_SLOW_FAST_TEST   0
+
+#define ENABLE_PROTOCOL_FRAME_TEST     1
 
 static PlatformResetInfo_t g_reset_info;
 
@@ -58,6 +66,27 @@ typedef struct
 } AppTestStateMachineCtx_t;
 
 static AppTestStateMachineCtx_t g_sm_test_ctx;
+
+static void App_TestProtocolFrame(void)
+{
+    int ret;
+
+    BoardLog_PrintSeparator();
+    BoardLog_Info("ProtocolFrame Test Start\r\n");
+
+    ret = ProtocolFrame_RunSelfTest();
+
+    if (ret == 0)
+    {
+        BoardLog_Info("ProtocolFrame self test = PASS\r\n");
+    }
+    else
+    {
+        BoardLog_Error("ProtocolFrame self test = FAIL, ret=%d\r\n", ret);
+    }
+
+    BoardLog_Info("ProtocolFrame Test End\r\n");
+}
 
 static void App_ProcessUartRxTest(void)
 {
@@ -469,7 +498,9 @@ void App_Init(void)
     PlatformReset_Capture(&g_reset_info);
     PlatformReset_PrintInfo(&g_reset_info);
     PlatformReset_ClearFlags();
+#if ENABLE_UART_RX_SLOW_FAST_TEST
     UartRxConsumer_Init();
+#endif
     App_PrintClockInfo();
     App_PrintTickTest();
 
@@ -489,12 +520,17 @@ void App_Init(void)
 #if ENABLE_STATE_MACHINE_TEST
     App_TestStateMachine();
 #endif
+#if ENABLE_PROTOCOL_FRAME_TEST
+    App_TestProtocolFrame();
+#endif
     printf("========================================\r\n");
 }
 
 void App_Run(void)
 {
+#if ENABLE_UART_RX_SLOW_FAST_TEST
         UartRxConsumer_Run();
+#endif
         App_ReportUartRxStatsPeriodically();
 
         App_RunSoftwareResetTest();
