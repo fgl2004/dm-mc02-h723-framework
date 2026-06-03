@@ -1,6 +1,7 @@
 #include "command_service.h"
 
 #include "board_log.h"
+#include "platform_time.h"
 
 #include <string.h>
 
@@ -102,6 +103,8 @@ int CommandService_Dispatch(const ProtocolFrame_t *req_frame,
     int index;
     int ret;
     uint8_t category;
+    uint32_t start_cycle;
+    uint32_t elapsed_us;
 
     if ((req_frame == NULL) || (resp == NULL))
     {
@@ -109,6 +112,8 @@ int CommandService_Dispatch(const ProtocolFrame_t *req_frame,
         g_command_service.stats.last_error = PROTO_ERROR_INVALID_PARAM;
         return COMMAND_SERVICE_INVALID_PARAM;
     }
+
+    start_cycle = PlatformTime_ProfileStart();
 
     memset(resp, 0, sizeof(*resp));
 
@@ -123,6 +128,13 @@ int CommandService_Dispatch(const ProtocolFrame_t *req_frame,
                                req_frame->cmd,
                                PROTO_ERROR_INVALID_STATE);
 
+        elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+        g_command_service.stats.last_dispatch_us = elapsed_us;
+        if (elapsed_us > g_command_service.stats.max_dispatch_us)
+        {
+            g_command_service.stats.max_dispatch_us = elapsed_us;
+        }
+
         return COMMAND_SERVICE_NOT_INITIALIZED;
     }
 
@@ -136,6 +148,13 @@ int CommandService_Dispatch(const ProtocolFrame_t *req_frame,
         CommandService_SetNack(resp,
                                req_frame->cmd,
                                PROTO_ERROR_UNKNOWN_CMD);
+
+        elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+        g_command_service.stats.last_dispatch_us = elapsed_us;
+        if (elapsed_us > g_command_service.stats.max_dispatch_us)
+        {
+            g_command_service.stats.max_dispatch_us = elapsed_us;
+        }
 
         return COMMAND_SERVICE_UNKNOWN_CMD;
     }
@@ -152,6 +171,13 @@ int CommandService_Dispatch(const ProtocolFrame_t *req_frame,
         CommandService_SetNack(resp,
                                req_frame->cmd,
                                PROTO_ERROR_INTERNAL_ERROR);
+
+        elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+        g_command_service.stats.last_dispatch_us = elapsed_us;
+        if (elapsed_us > g_command_service.stats.max_dispatch_us)
+        {
+            g_command_service.stats.max_dispatch_us = elapsed_us;
+        }
 
         return COMMAND_SERVICE_ERROR;
     }
@@ -171,6 +197,14 @@ int CommandService_Dispatch(const ProtocolFrame_t *req_frame,
         }
 
         g_command_service.stats.last_error = PROTO_ERROR_OK;
+
+        elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+        g_command_service.stats.last_dispatch_us = elapsed_us;
+        if (elapsed_us > g_command_service.stats.max_dispatch_us)
+        {
+            g_command_service.stats.max_dispatch_us = elapsed_us;
+        }
+
         return COMMAND_SERVICE_OK;
     }
 
@@ -183,6 +217,13 @@ int CommandService_Dispatch(const ProtocolFrame_t *req_frame,
 
     g_command_service.stats.handler_error_count++;
     g_command_service.stats.last_error = resp->error_code;
+
+    elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+    g_command_service.stats.last_dispatch_us = elapsed_us;
+    if (elapsed_us > g_command_service.stats.max_dispatch_us)
+    {
+        g_command_service.stats.max_dispatch_us = elapsed_us;
+    }
 
     return COMMAND_SERVICE_ERROR;
 }
@@ -211,6 +252,8 @@ void CommandService_PrintStats(void)
     BoardLog_Info("  register_count       = %lu\r\n", g_command_service.stats.register_count);
     BoardLog_Info("  duplicate_register   = %lu\r\n", g_command_service.stats.duplicate_register_count);
     BoardLog_Info("  dispatch_count       = %lu\r\n", g_command_service.stats.dispatch_count);
+    BoardLog_Info("  last_dispatch_us     = %lu\r\n", g_command_service.stats.last_dispatch_us);
+    BoardLog_Info("  max_dispatch_us      = %lu\r\n", g_command_service.stats.max_dispatch_us);
     BoardLog_Info("  system_cmd_count     = %lu\r\n", g_command_service.stats.system_cmd_count);
     BoardLog_Info("  diag_cmd_count       = %lu\r\n", g_command_service.stats.diag_cmd_count);
     BoardLog_Info("  imu_cmd_count        = %lu\r\n", g_command_service.stats.imu_cmd_count);

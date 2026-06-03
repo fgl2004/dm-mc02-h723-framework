@@ -105,12 +105,14 @@ typedef enum
     DIAG_CMD_GET_HEALTH          = 0x20U,
     DIAG_CMD_GET_ERROR_COUNTERS  = 0x21U,
     DIAG_CMD_GET_BUFFER_STATS    = 0x22U,
-    DIAG_CMD_GET_TRACE_STATUS    = 0x23U,
-    DIAG_CMD_CLEAR_COUNTERS      = 0x24U,
-    DIAG_CMD_DUMP_TRACE          = 0x25U,
-    DIAG_CMD_GET_TASK_HEALTH     = 0x26U
+    DIAG_CMD_GET_TIMING_STATS    = 0x23U,
+    DIAG_CMD_GET_LAST_RECORDS    = 0x24U,
+    DIAG_CMD_GET_PIPELINE_STATS  = 0x25U,
+    DIAG_CMD_CLEAR_COUNTERS      = 0x26U,
+    DIAG_CMD_GET_TRACE_STATUS    = 0x27U,
+    DIAG_CMD_DUMP_TRACE          = 0x28U,
+    DIAG_CMD_GET_TASK_HEALTH     = 0x29U
 } DiagnosticCommandId_t;
-
 /* Stage 4. */
 typedef enum
 {
@@ -252,6 +254,9 @@ typedef struct
     uint32_t table_full_count;
     uint32_t invalid_param_count;
     uint32_t handler_error_count;
+
+    uint32_t last_dispatch_us;
+    uint32_t max_dispatch_us;
 
     uint8_t registered_count;
     uint8_t last_cmd;

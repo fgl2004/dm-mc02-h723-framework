@@ -28,6 +28,8 @@ typedef struct
     uint32_t frame_received_count;
     uint32_t frame_sent_count;
     uint32_t event_sent_count;
+    uint32_t resp_sent_count;
+    uint32_t nack_sent_count;
 
     uint32_t req_frame_count;
     uint32_t resp_frame_count;
@@ -38,6 +40,9 @@ typedef struct
     uint32_t parser_error_count;
     uint32_t tx_error_count;
     uint32_t build_error_count;
+
+    uint32_t last_process_us;
+    uint32_t max_process_us;
 
     uint8_t last_rx_type;
     uint8_t last_rx_flags;
@@ -54,7 +59,9 @@ void ProtocolManager_Init(void);
 void ProtocolManager_Process(void);
 
 const ProtocolManagerStats_t *ProtocolManager_GetStats(void);
+const ProtocolFrameParserStats_t *ProtocolManager_GetParserStats(void);
 void ProtocolManager_ResetStats(void);
+void ProtocolManager_ResetParserStats(void);
 void ProtocolManager_PrintStats(void);
 
 #ifdef __cplusplus

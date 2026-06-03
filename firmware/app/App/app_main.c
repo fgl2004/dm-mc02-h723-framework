@@ -14,6 +14,7 @@
 #include "command_manager.h"
 #include "protocol_manager.h"
 #include "mcu_info_app.h"
+#include "diagnostic_app.h"
 
 
 #include <stdio.h>
@@ -35,7 +36,7 @@
 
 
 #define ENABLE_UART_RX_DUMP_TEST       0
-#define ENABLE_UART_RX_STATS_REPORT    1
+#define ENABLE_UART_RX_STATS_REPORT    0
 #define UART_RX_STATS_PERIOD_MS        100U
 
 #define ENABLE_UART_RX_SLOW_FAST_TEST   0
@@ -578,6 +579,8 @@ void App_Init(void)
     McuInfoApp_Init();
     (void)McuInfoApp_UpdateResetSnapshot(&g_reset_info);
 
+    DiagnosticApp_Init();
+
     CommandManager_Init();
     ProtocolManager_Init();
 #endif
@@ -589,8 +592,9 @@ void App_Run(void)
 #if ENABLE_UART_RX_SLOW_FAST_TEST
         UartRxConsumer_Run();
 #endif 
-				App_RunMcuInfoEventTest();
+		App_RunMcuInfoEventTest();
 #if ENABLE_PROTOCOL_MANAGER_TEST
+        DiagnosticApp_Run();
         McuInfoApp_Run();
         ProtocolManager_Process();
 #endif

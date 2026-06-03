@@ -3,6 +3,7 @@
 #include "command_service.h"
 #include "ring_buffer.h"
 #include "board_log.h"
+#include "platform_time.h"
 
 #include <string.h>
 
@@ -39,6 +40,8 @@ int CommandManager_Dispatch(const ProtocolFrame_t *req_frame,
                             CommandManagerResponse_t *resp)
 {
     int ret;
+    uint32_t start_cycle;
+    uint32_t elapsed_us;
 
     if ((req_frame == NULL) || (resp == NULL))
     {
@@ -46,6 +49,8 @@ int CommandManager_Dispatch(const ProtocolFrame_t *req_frame,
         g_command_manager.stats.last_error = PROTO_ERROR_INVALID_PARAM;
         return COMMAND_MANAGER_INVALID_PARAM;
     }
+
+    start_cycle = PlatformTime_ProfileStart();
 
     memset(resp, 0, sizeof(*resp));
 
@@ -61,6 +66,13 @@ int CommandManager_Dispatch(const ProtocolFrame_t *req_frame,
                                req_frame->cmd,
                                PROTO_ERROR_INVALID_STATE);
 
+        elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+        g_command_manager.stats.last_dispatch_us = elapsed_us;
+        if (elapsed_us > g_command_manager.stats.max_dispatch_us)
+        {
+            g_command_manager.stats.max_dispatch_us = elapsed_us;
+        }
+
         return COMMAND_MANAGER_ERROR;
     }
 
@@ -71,6 +83,14 @@ int CommandManager_Dispatch(const ProtocolFrame_t *req_frame,
     if (ret == COMMAND_SERVICE_OK)
     {
         g_command_manager.stats.last_error = PROTO_ERROR_OK;
+
+        elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+        g_command_manager.stats.last_dispatch_us = elapsed_us;
+        if (elapsed_us > g_command_manager.stats.max_dispatch_us)
+        {
+            g_command_manager.stats.max_dispatch_us = elapsed_us;
+        }
+
         return COMMAND_MANAGER_OK;
     }
 
@@ -78,6 +98,14 @@ int CommandManager_Dispatch(const ProtocolFrame_t *req_frame,
     {
         g_command_manager.stats.unknown_cmd_count++;
         g_command_manager.stats.last_error = PROTO_ERROR_UNKNOWN_CMD;
+
+        elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+        g_command_manager.stats.last_dispatch_us = elapsed_us;
+        if (elapsed_us > g_command_manager.stats.max_dispatch_us)
+        {
+            g_command_manager.stats.max_dispatch_us = elapsed_us;
+        }
+
         return COMMAND_MANAGER_UNKNOWN_CMD;
     }
 
@@ -94,6 +122,13 @@ int CommandManager_Dispatch(const ProtocolFrame_t *req_frame,
     else
     {
         g_command_manager.stats.last_error = resp->error_code;
+    }
+
+    elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+    g_command_manager.stats.last_dispatch_us = elapsed_us;
+    if (elapsed_us > g_command_manager.stats.max_dispatch_us)
+    {
+        g_command_manager.stats.max_dispatch_us = elapsed_us;
     }
 
     return COMMAND_MANAGER_ERROR;
@@ -225,6 +260,8 @@ void CommandManager_PrintStats(void)
     BoardLog_Info("  initialized              = %u\r\n", g_command_manager.initialized);
     BoardLog_Info("  init_count               = %lu\r\n", g_command_manager.stats.init_count);
     BoardLog_Info("  dispatch_count           = %lu\r\n", g_command_manager.stats.dispatch_count);
+    BoardLog_Info("  last_dispatch_us         = %lu\r\n", g_command_manager.stats.last_dispatch_us);
+    BoardLog_Info("  max_dispatch_us          = %lu\r\n", g_command_manager.stats.max_dispatch_us);
     BoardLog_Info("  routed_to_cmd_service    = %lu\r\n", g_command_manager.stats.routed_to_command_service_count);
     BoardLog_Info("  post_event_count         = %lu\r\n", g_command_manager.stats.post_event_count);
     BoardLog_Info("  event_pop_count          = %lu\r\n", g_command_manager.stats.event_pop_count);

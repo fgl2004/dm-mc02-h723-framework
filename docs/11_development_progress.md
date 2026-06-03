@@ -826,51 +826,512 @@ Stage 2 V2 增强阶段：
 
 ### 8.1 Stage Goal
 
-建立系统可观测性骨架。
+建立系统可观测性与工程诊断骨架。
 
-该阶段将在 Stage 1 的底层可观测能力和 Stage 2 的 PC 通信能力基础上，建立更系统的诊断框架。
+Stage 3 将在 Stage 1 的底层可观测能力和 Stage 2 的 UART Reliable Protocol 通信能力基础上，构建一套可查询、可定位、可验证、可扩展的诊断框架。
 
-重点包括：
+该阶段的目标不是简单打印日志，也不是把所有内部变量暴露给 PC，而是让系统在出现异常时能够回答以下工程问题：
 
 ```text
-Device Manager
-Diagnostic Manager
-Buffer Manager
-Log Manager
-Trace Manager
-Health Manager
-Watchdog Manager
-PC 查询诊断信息
+1. 系统当前是否还活着？
+2. 系统整体是否健康？
+3. 错误发生在哪一层？
+4. 是通信错误、资源压力、状态异常、时序问题，还是 App handler 问题？
+5. 问题是偶发、持续累积，还是瞬间崩溃？
+6. 出问题前最后发生了什么？
+7. 能否通过 PC 工具远程定位，而不依赖调试器？
+```
+
+Stage 3 的核心目标是：
+
+> 把系统从“能运行”升级为“可观测、可诊断、可定位”。
+
+---
+
+### 8.2 Diagnostic View Design
+
+Stage 3 采用诊断视图方式组织系统信息，而不是简单暴露所有变量。
+
+推荐诊断视图：
+
+```text
+Health View          总体健康视图
+Pipeline View        通信链路视图
+Error View           错误计数器视图
+Buffer View          队列 / 缓冲压力视图
+Timing View          时间 / 延迟 / 抖动视图
+Last Records View    最近命令 / 事件 / 错误视图
+State View           状态机视图，后续扩展
+Build / Config View  版本与配置视图，后续扩展
+```
+
+Stage 3 V1 优先实现以下四个基础视图：
+
+```text
+GET_HEALTH
+GET_ERROR_COUNTERS
+GET_BUFFER_STATS
+GET_LAST_RECORDS
 ```
 
 ---
 
-### 8.2 Planned Tasks
+### 8.3 Current Diagnostic Data Sources
 
-| 任务                             | 状态          | 说明                       |
-| ------------------------------ | ----------- | ------------------------ |
-| Device Manager                 | Not Started | 管理设备状态                   |
-| Diagnostic Manager             | Not Started | 状态、错误、计数器                |
-| Buffer Manager                 | Not Started | 统一记录 buffer 水位           |
-| Log Manager                    | Not Started | 非阻塞日志                    |
-| Trace Manager                  | Not Started | 事件追踪                     |
-| Health Manager                 | Not Started | 任务健康上报                   |
-| Watchdog Manager               | Not Started | 基于健康状态喂狗                 |
-| PC Diagnostic Commands         | Not Started | 通过 UART 协议查询诊断信息         |
-| McuInfoApp Diagnostic Snapshot | Planned     | 诊断信息通过 McuInfoApp 汇总到 PC |
+当前工程中多个模块已经具备全局上下文和统计结构体，这些信息将作为 Stage 3 诊断框架的原始数据源。
+
+典型数据源包括：
+
+```text
+PlatformUart / RingBuffer
+  - rx_bytes
+  - rx_error_count
+  - rx_ring_available
+  - rx_ring_free
+  - rb_high_watermark
+  - rb_overflow_count
+
+ProtocolFrame Parser
+  - frame_ok_count
+  - sof_error_count
+  - len_error_count
+  - crc_error_count
+
+ProtocolManager
+  - frame_received_count
+  - frame_sent_count
+  - req_frame_count
+  - resp_frame_count
+  - nack_frame_count
+  - event_frame_count
+  - parser_error_count
+  - tx_error_count
+  - last_rx_cmd
+  - last_tx_cmd
+
+CommandManager
+  - dispatch_count
+  - post_event_count
+  - event_pop_count
+  - event_drop_count
+  - unknown_cmd_count
+  - invalid_param_count
+  - error_count
+  - last_cmd
+  - last_event_id
+  - last_error
+
+CommandService
+  - init_count
+  - register_count
+  - registered_count
+  - dispatch_count
+  - unknown_cmd_count
+  - handler_error_count
+  - last_cmd
+  - last_category
+  - last_error
+
+McuInfoApp
+  - run_count
+  - post_event_count
+  - event_forward_count
+  - event_drop_count
+  - update_snapshot_count
+  - get_snapshot_count
+  - last_event_id
+  - last_error
+```
+
+这些 stats 的工程意义是：
+
+```text
+把 UART / Parser / Protocol / Command / App / Event 这些链路从黑盒变成可观测对象。
+```
 
 ---
 
-### 8.3 Acceptance Criteria
+### 8.4 Diagnostic Framework Architecture
+
+Stage 3 建议新增：
 
 ```text
-1. PC 可以查询系统状态
-2. PC 可以查询错误计数器
-3. PC 可以查询 buffer 使用情况
-4. 状态切换有 Trace
-5. 关键任务有健康上报
-6. 系统异常有明确错误码
-7. 诊断信息可以通过 McuInfoApp 暴露给 PC
+firmware/app/Apps/diagnostic_app.h
+firmware/app/Apps/diagnostic_app.c
+```
+
+总体链路：
+
+```text
+PC Tool / UI
+  ↓
+ProtocolManager
+  ↓
+CommandManager
+  ↓
+CommandService
+  ↓
+DiagnosticApp command handlers
+  ↓
+DiagnosticApp
+  ↓
+ProtocolManager / CommandManager / CommandService / McuInfoApp / Platform / RingBuffer
+```
+
+设计原则：
+
+```text
+1. DiagnosticApp 不直接发送协议帧
+2. DiagnosticApp handler 通过 McuInfoApp_RegisterCommand() 挂载到 CommandService
+3. DiagnosticApp 只负责聚合、解释和组织诊断视图
+4. ProtocolManager 仍然是唯一帧收发执行者
+5. CommandService 仍然是命令表中心
+6. McuInfoApp 仍然是 App 与 PC 信息交互牵手入口
+```
+
+推荐初始化顺序：
+
+```text
+CommandService_Init()
+McuInfoApp_Init()
+McuInfoApp_UpdateResetSnapshot()
+DiagnosticApp_Init()
+DiagnosticApp_RegisterCommands()
+CommandManager_Init()
+ProtocolManager_Init()
+```
+
+---
+
+### 8.5 Diagnostic Commands
+
+Stage 3 诊断命令从 `0x20` 开始规划。
+
+```c
+typedef enum
+{
+    DIAG_CMD_GET_HEALTH          = 0x20,
+    DIAG_CMD_GET_ERROR_COUNTERS  = 0x21,
+    DIAG_CMD_GET_BUFFER_STATS    = 0x22,
+    DIAG_CMD_GET_TIMING_STATS    = 0x23,
+    DIAG_CMD_GET_LAST_RECORDS    = 0x24,
+    DIAG_CMD_GET_PIPELINE_STATS  = 0x25,
+    DIAG_CMD_CLEAR_COUNTERS      = 0x26,
+    DIAG_CMD_GET_TRACE_STATUS    = 0x27,
+    DIAG_CMD_DUMP_TRACE          = 0x28
+} DiagnosticCommandId_t;
+```
+
+Stage 3 V1 优先实现：
+
+```text
+0x20 GET_HEALTH
+0x21 GET_ERROR_COUNTERS
+0x22 GET_BUFFER_STATS
+0x24 GET_LAST_RECORDS
+```
+
+暂时保留：
+
+```text
+0x23 GET_TIMING_STATS
+0x25 GET_PIPELINE_STATS
+0x26 CLEAR_COUNTERS
+0x27 GET_TRACE_STATUS
+0x28 DUMP_TRACE
+```
+
+---
+
+### 8.6 Planned Tasks
+
+| 任务 | 状态 | 说明 |
+| --- | --- | --- |
+| Diagnostic Design Document | Done | 建立 `05_diagnostic_design.md`，作为 Stage 3 开发总纲 |
+| DiagnosticApp Skeleton | Not Started | 新增 `diagnostic_app.h/.c`，建立诊断中心 App |
+| Diagnostic Commands Registration | Not Started | 通过 `McuInfoApp_RegisterCommand()` 挂载诊断命令 |
+| GET_HEALTH | Not Started | 返回系统总体健康摘要 |
+| GET_ERROR_COUNTERS | Not Started | 返回各层错误计数器摘要 |
+| GET_BUFFER_STATS | Not Started | 返回 UART / RingBuffer / Event Queue 资源压力摘要 |
+| GET_LAST_RECORDS | Not Started | 返回最近命令、事件、错误、NACK、复位信息 |
+| GET_TIMING_STATS | Planned | 后续返回主循环周期、最大延迟、模块耗时 |
+| GET_PIPELINE_STATS | Planned | 后续返回完整通信链路统计 |
+| CLEAR_COUNTERS | Planned | 后续支持清除诊断计数器 |
+| Trace Ring | Planned | 后续实现最近记录环形追踪 |
+| Health State Evaluation | Not Started | 建立 OK / WARN / ERROR 健康状态判断逻辑 |
+| Fault Injection Tests | Planned | 通过未知命令、CRC 错误、队列满、handler error 验证诊断视图 |
+| Python Diagnostic Test | Not Started | 新增 `proto_diagnostic_test.py` |
+| UI Diagnostic Buttons | Not Started | 增加 HEALTH / ERRORS / BUFFERS / LAST 查询按钮 |
+| Development Progress Sync | Not Started | Stage 3 开发后同步进度文档 |
+
+---
+
+### 8.7 Health View
+
+Health View 是系统诊断第一视图，用于快速判断系统是否健康。
+
+推荐字段：
+
+```text
+health
+uptime
+loop_count
+err_total
+drop_total
+rx_ovf
+last_error
+last_cmd
+last_event
+```
+
+Health 状态建议：
+
+```text
+OK:
+  没有严重错误
+  没有 queue drop
+  没有 UART overflow
+  handler_error_count == 0
+
+WARN:
+  出现 unknown command
+  出现少量 parser error
+  出现 buffer high watermark 较高
+  出现 event drop 但系统仍可运行
+
+ERROR:
+  handler_error_count > 0
+  queue drop 持续增加
+  UART overflow 持续增加
+  ProtocolManager tx_error_count > 0
+  invalid_state / internal_error 持续出现
+```
+
+返回示例：
+
+```text
+health=OK,uptime=125430,err=0,drop=0,rx_ovf=0,last=0x00
+```
+
+---
+
+### 8.8 Error View
+
+Error View 用于回答系统正在犯什么类型的错误。
+
+推荐统计项：
+
+```text
+unknown_cmd
+handler_error
+invalid_param
+invalid_state
+busy
+queue_full
+crc_error
+parser_error
+uart_error
+overflow
+tx_error
+build_error
+```
+
+返回示例：
+
+```text
+unknown=1,handler=0,parser=0,crc=0,busy=0,qfull=0,uart=0,ovf=0
+```
+
+工程意义：
+
+```text
+1. 判断错误是否正在累积
+2. 判断错误发生在协议层、命令层、队列层，还是底层 UART
+3. 判断是未知命令、handler 错误、资源忙，还是参数错误
+4. 人为注入错误后，验证对应计数器是否增长
+```
+
+---
+
+### 8.9 Buffer View
+
+Buffer View 用于观察系统资源压力。
+
+推荐统计项：
+
+```text
+uart_avail
+uart_free
+uart_high
+uart_ovf
+mcu_evt_drop
+cmd_evt_drop
+mcu_evt_post
+mcu_evt_fwd
+cmd_evt_post
+cmd_evt_pop
+```
+
+返回示例：
+
+```text
+uart_avail=0,uart_high=180,uart_ovf=0,mcu_drop=0,cmd_drop=0
+```
+
+工程意义：
+
+```text
+1. 判断 UART RX RingBuffer 是否接近满
+2. 判断 McuInfoApp event queue 是否积压
+3. 判断 CommandManager event queue 是否积压
+4. 判断是否存在 overflow / drop
+5. 判断 high watermark 是否接近容量上限
+```
+
+---
+
+### 8.10 Last Records View
+
+Last Records View 用于保存最近发生过的关键行为。
+
+第一版推荐字段：
+
+```text
+last_cmd
+last_event
+last_error
+last_nack_cmd
+last_nack_error
+last_reset
+last_health
+```
+
+返回示例：
+
+```text
+last_cmd=0x0D,last_evt=0x85,last_err=0x00,last_nack=0x7E,last_reset=POR
+```
+
+后续可升级为 trace ring：
+
+```text
+[12340] CMD 0x01 RESP OK
+[12400] EVENT 0x85 APP_MESSAGE
+[12500] CMD 0x7E NACK UNKNOWN_CMD
+[12600] CMD 0x0D RESP OK
+```
+
+---
+
+### 8.11 Fault Injection / Chaos Test Plan
+
+诊断框架必须能够被验证。
+
+人为注入错误的意义：
+
+```text
+1. 验证错误是否能被检测到
+2. 验证错误计数器是否增长
+3. 验证错误是否定位到正确模块
+4. 验证系统是否能从错误中恢复
+5. 验证诊断视图是否能反映真实问题
+```
+
+Stage 3 V1 推荐验证以下错误：
+
+| 诊断对象 | 注入方法 | 预期响应 | 预期计数器 |
+| --- | --- | --- | --- |
+| 未知命令 | PC 发送 `0x7E` | NACK UNKNOWN_CMD | `unknown_cmd_count++` |
+| CRC 错误 | PC 发送 CRC 被篡改的帧 | 无 RESP | `crc_error_count++` |
+| 垃圾字节 | PC 发送随机字节后再发 PING | PING 正常 | `sof_error_count++` |
+| 半包 | PC 发送前半帧，延迟后发送后半帧 | 后半到达后 RESP | parser 等待后恢复 |
+| 粘包 | PC 连续发送多帧 | 多个 RESP | frame_ok_count 增长 |
+| 事件队列满 | MCU 快速 PostEvent 超过队列容量 | 系统不崩 | event_drop_count++ |
+| handler 错误 | 测试 handler 返回 ERROR | NACK INTERNAL_ERROR | handler_error_count++ |
+| UART RX 溢出 | PC 高速发送 + MCU 慢消费 | 系统不崩 | rx_ring_overflow++ |
+
+---
+
+### 8.12 Stage 3 V1 Implementation Plan
+
+推荐实现顺序：
+
+| Step | Task | Output |
+| --- | --- | --- |
+| 3.1 | 诊断设计文档 | `docs/05_diagnostic_design.md` |
+| 3.2 | DiagnosticApp skeleton | `diagnostic_app.h/.c` |
+| 3.3 | GET_HEALTH | 返回系统健康摘要 |
+| 3.4 | GET_ERROR_COUNTERS | 返回错误计数器摘要 |
+| 3.5 | GET_BUFFER_STATS | 返回 buffer / queue 压力摘要 |
+| 3.6 | GET_LAST_RECORDS | 返回最近命令 / 事件 / 错误 |
+| 3.7 | Python CLI test | `proto_diagnostic_test.py` |
+| 3.8 | UI Diagnostic buttons | HEALTH / ERRORS / BUFFERS / LAST |
+| 3.9 | Fault injection tests | unknown cmd / crc / event queue full / handler error |
+| 3.10 | 文档与进度同步 | 更新 development progress |
+
+---
+
+### 8.13 Stage 3 V1 Acceptance Criteria
+
+Stage 3 V1 完成标准：
+
+```text
+1. DiagnosticApp 可以初始化并周期运行
+2. DiagnosticApp 通过 McuInfoApp_RegisterCommand() 注册诊断命令
+3. PC 可以查询 GET_HEALTH
+4. PC 可以查询 GET_ERROR_COUNTERS
+5. PC 可以查询 GET_BUFFER_STATS
+6. PC 可以查询 GET_LAST_RECORDS
+7. 未知命令注入后，Error View 能反映 unknown_cmd 增长
+8. CRC 错误注入后，Error View 或 Pipeline View 能反映 parser/crc error 增长
+9. Event queue full 注入后，Buffer View 能反映 event_drop 增长
+10. handler error 注入后，Error View 能反映 handler_error 增长
+11. UI 可以显示基础诊断结果
+12. 诊断命令不会明显扰动 UART 协议热路径
+```
+
+---
+
+### 8.14 Design Rules
+
+```text
+1. 诊断视图用于回答工程问题，不用于展示所有变量
+2. 诊断数据优先来自各模块已有 stats
+3. 不重复维护已有模块已经维护的计数器
+4. DiagnosticApp 负责聚合与解释，不负责协议收发
+5. DiagnosticApp 不直接调用 ProtocolManager
+6. DiagnosticApp 命令 handler 通过 McuInfoApp_RegisterCommand() 挂载
+7. 所有诊断命令第一版使用 ASCII payload，便于 PC/UI 调试
+8. 后续再考虑二进制 TLV payload
+9. 诊断命令不得频繁 printf
+10. 诊断命令不得大量占用栈空间
+11. 大型临时 buffer 应放入模块上下文或使用静态缓冲
+12. 每个诊断视图都应至少有一种人为注入方式验证
+13. Health View 应只给结论和关键摘要
+14. Error View 应按错误类型分类
+15. Buffer View 必须包含 high watermark / overflow / drop
+16. Timing View 后续使用 DWT cycle counter 增强
+17. Last Records View 后续可升级为 trace ring
+18. Stage 3 V1 先小步闭环，不追求大而全
+```
+
+---
+
+### 8.15 Current Decision
+
+当前 Stage 3 设计决策：
+
+```text
+1. 新增 DiagnosticApp 作为诊断聚合中心
+2. 诊断命令从 0x20 开始
+3. Stage 3 V1 优先实现 GET_HEALTH / GET_ERROR_COUNTERS / GET_BUFFER_STATS / GET_LAST_RECORDS
+4. 第一版诊断 payload 使用 ASCII 字符串
+5. 不急于实现完整 trace ring
+6. 不急于实现 HardFault snapshot
+7. 不急于实现 Timing 精细 profiling
+8. 先基于已有 stats 建立诊断视图
+9. 每个视图必须有对应错误注入测试
+10. Stage 3 的目标是工程定位能力，而不是日志展示能力
 ```
 
 ---

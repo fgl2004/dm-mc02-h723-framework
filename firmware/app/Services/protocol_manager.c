@@ -83,15 +83,28 @@ void ProtocolManager_Init(void)
 
 void ProtocolManager_Process(void)
 {
+    uint32_t start_cycle;
+    uint32_t elapsed_us;
+
     if (g_protocol_manager.initialized == 0U)
     {
         return;
     }
 
+    start_cycle = PlatformTime_ProfileStart();
+
     g_protocol_manager.stats.process_count++;
 
     ProtocolManager_ProcessRx();
     ProtocolManager_ProcessPendingEvents();
+
+    elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+    g_protocol_manager.stats.last_process_us = elapsed_us;
+
+    if (elapsed_us > g_protocol_manager.stats.max_process_us)
+    {
+        g_protocol_manager.stats.max_process_us = elapsed_us;
+    }
 }
 
 const ProtocolManagerStats_t *ProtocolManager_GetStats(void)
@@ -99,9 +112,19 @@ const ProtocolManagerStats_t *ProtocolManager_GetStats(void)
     return &g_protocol_manager.stats;
 }
 
+const ProtocolFrameParserStats_t *ProtocolManager_GetParserStats(void)
+{
+    return ProtocolFrameParser_GetStats(&g_protocol_manager.parser);
+}
+
 void ProtocolManager_ResetStats(void)
 {
     memset(&g_protocol_manager.stats, 0, sizeof(g_protocol_manager.stats));
+}
+
+void ProtocolManager_ResetParserStats(void)
+{
+    memset(&g_protocol_manager.parser.stats, 0, sizeof(g_protocol_manager.parser.stats));
 }
 
 void ProtocolManager_PrintStats(void)
@@ -116,9 +139,13 @@ void ProtocolManager_PrintStats(void)
     BoardLog_Info("  initialized        = %u\r\n", g_protocol_manager.initialized);
     BoardLog_Info("  init_count         = %lu\r\n", g_protocol_manager.stats.init_count);
     BoardLog_Info("  process_count      = %lu\r\n", g_protocol_manager.stats.process_count);
+    BoardLog_Info("  last_process_us    = %lu\r\n", g_protocol_manager.stats.last_process_us);
+    BoardLog_Info("  max_process_us     = %lu\r\n", g_protocol_manager.stats.max_process_us);
     BoardLog_Info("  rx_bytes_consumed  = %lu\r\n", g_protocol_manager.stats.rx_bytes_consumed);
     BoardLog_Info("  frame_received     = %lu\r\n", g_protocol_manager.stats.frame_received_count);
     BoardLog_Info("  frame_sent         = %lu\r\n", g_protocol_manager.stats.frame_sent_count);
+    BoardLog_Info("  resp_sent          = %lu\r\n", g_protocol_manager.stats.resp_sent_count);
+    BoardLog_Info("  nack_sent          = %lu\r\n", g_protocol_manager.stats.nack_sent_count);
     BoardLog_Info("  event_sent         = %lu\r\n", g_protocol_manager.stats.event_sent_count);
     BoardLog_Info("  req_frame_count    = %lu\r\n", g_protocol_manager.stats.req_frame_count);
     BoardLog_Info("  resp_frame_count   = %lu\r\n", g_protocol_manager.stats.resp_frame_count);
@@ -372,6 +399,16 @@ static int ProtocolManager_SendFrame(uint8_t type,
     }
 
     g_protocol_manager.stats.frame_sent_count++;
+
+    if (type == PROTO_FRAME_TYPE_RESP)
+    {
+        g_protocol_manager.stats.resp_sent_count++;
+    }
+    else if (type == PROTO_FRAME_TYPE_NACK)
+    {
+        g_protocol_manager.stats.nack_sent_count++;
+    }
+
     g_protocol_manager.stats.last_tx_type = type;
     g_protocol_manager.stats.last_tx_cmd = cmd;
 

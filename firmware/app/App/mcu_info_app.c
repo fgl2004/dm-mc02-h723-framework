@@ -130,10 +130,15 @@ void McuInfoApp_Init(void)
 
 void McuInfoApp_Run(void)
 {
+    uint32_t start_cycle;
+    uint32_t elapsed_us;
+
     if (g_mcu_info_app.initialized == 0U)
     {
         return;
     }
+
+    start_cycle = PlatformTime_ProfileStart();
 
     g_mcu_info_app.stats.run_count++;
 
@@ -145,6 +150,14 @@ void McuInfoApp_Run(void)
      * ProtocolManager later sends them as EVENT frames.
      */
     McuInfoApp_RunEventForwarder();
+
+    elapsed_us = PlatformTime_ProfileEndUs(start_cycle);
+    g_mcu_info_app.stats.last_run_us = elapsed_us;
+
+    if (elapsed_us > g_mcu_info_app.stats.max_run_us)
+    {
+        g_mcu_info_app.stats.max_run_us = elapsed_us;
+    }
 }
 
 int McuInfoApp_RegisterCommand(uint8_t cmd,
@@ -450,6 +463,8 @@ void McuInfoApp_PrintStats(void)
     BoardLog_Info("  initialized              = %u\r\n", g_mcu_info_app.initialized);
     BoardLog_Info("  init_count               = %lu\r\n", g_mcu_info_app.stats.init_count);
     BoardLog_Info("  run_count                = %lu\r\n", g_mcu_info_app.stats.run_count);
+    BoardLog_Info("  last_run_us              = %lu\r\n", g_mcu_info_app.stats.last_run_us);
+    BoardLog_Info("  max_run_us               = %lu\r\n", g_mcu_info_app.stats.max_run_us);
     BoardLog_Info("  register_command_count   = %lu\r\n", g_mcu_info_app.stats.register_command_count);
     BoardLog_Info("  register_command_fail    = %lu\r\n", g_mcu_info_app.stats.register_command_fail_count);
     BoardLog_Info("  ping_count               = %lu\r\n", g_mcu_info_app.stats.ping_count);

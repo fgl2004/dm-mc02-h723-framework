@@ -35,6 +35,7 @@
 "dm_mc02_h723_app\app_main.o"
 "dm_mc02_h723_app\uart_rx_consumer.o"
 "dm_mc02_h723_app\mcu_info_app.o"
+"dm_mc02_h723_app\diagnostic_app.o"
 "dm_mc02_h723_app\ring_buffer.o"
 "dm_mc02_h723_app\crc16.o"
 "dm_mc02_h723_app\state_machine.o"

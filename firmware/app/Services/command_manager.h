@@ -54,6 +54,9 @@ typedef struct
     uint32_t invalid_param_count;
     uint32_t error_count;
 
+    uint32_t last_dispatch_us;
+    uint32_t max_dispatch_us;
+
     uint8_t last_cmd;
     uint8_t last_event_id;
     uint8_t last_error;

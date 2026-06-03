@@ -26,6 +26,13 @@ from PySide6.QtWidgets import (
 import pyqtgraph as pg
 
 from h7_proto.constants import (
+    DIAG_CMD_GET_BUFFER_STATS,
+    DIAG_CMD_GET_ERROR_COUNTERS,
+    DIAG_CMD_GET_HEALTH,
+    DIAG_CMD_GET_LAST_RECORDS,
+    DIAG_CMD_GET_TIMING_STATS,
+    DIAG_CMD_GET_PIPELINE_STATS,
+    DIAG_CMD_CLEAR_COUNTERS,
     MCU_INFO_CMD_GET_APP_STATS,
     MCU_INFO_CMD_GET_COMMAND_STATS,
     MCU_INFO_CMD_GET_RESET_INFO,
@@ -279,6 +286,14 @@ class MainWindow(QMainWindow):
         self.proto_app_btn = QPushButton("APP_STATS")
         self.proto_cmd_stats_btn = QPushButton("COMMAND_STATS")
 
+        self.diag_health_btn = QPushButton("HEALTH")
+        self.diag_error_btn = QPushButton("ERRORS")
+        self.diag_buffer_btn = QPushButton("BUFFERS")
+        self.diag_last_btn = QPushButton("LAST_RECORDS")
+        self.diag_timing_btn = QPushButton("TIMING")
+        self.diag_pipeline_btn = QPushButton("PIPELINE")
+        self.diag_clear_btn = QPushButton("CLEAR_COUNTERS")
+
         self.proto_auto_poll_check = QCheckBox("Auto Poll")
         self.proto_poll_interval_spin = QSpinBox()
         self.proto_poll_interval_spin.setRange(100, 10000)
@@ -296,9 +311,19 @@ class MainWindow(QMainWindow):
         cmd_layout.addWidget(self.proto_app_btn, 2, 0)
         cmd_layout.addWidget(self.proto_cmd_stats_btn, 2, 1)
 
-        cmd_layout.addWidget(self.proto_auto_poll_check, 3, 0)
-        cmd_layout.addWidget(QLabel("Interval:"), 3, 1)
-        cmd_layout.addWidget(self.proto_poll_interval_spin, 3, 2)
+        cmd_layout.addWidget(self.diag_health_btn, 3, 0)
+        cmd_layout.addWidget(self.diag_error_btn, 3, 1)
+        cmd_layout.addWidget(self.diag_buffer_btn, 3, 2)
+
+        cmd_layout.addWidget(self.diag_last_btn, 4, 0)
+        cmd_layout.addWidget(self.diag_timing_btn, 4, 1)
+        cmd_layout.addWidget(self.diag_pipeline_btn, 4, 2)
+
+        cmd_layout.addWidget(self.diag_clear_btn, 5, 0)
+
+        cmd_layout.addWidget(self.proto_auto_poll_check, 6, 0)
+        cmd_layout.addWidget(QLabel("Interval:"), 6, 1)
+        cmd_layout.addWidget(self.proto_poll_interval_spin, 6, 2)
 
         layout.addWidget(cmd_group)
 
@@ -424,6 +449,27 @@ class MainWindow(QMainWindow):
         )
         self.proto_cmd_stats_btn.clicked.connect(
             lambda: self._send_protocol_command(MCU_INFO_CMD_GET_COMMAND_STATS, "COMMAND_STATS")
+        )
+        self.diag_health_btn.clicked.connect(
+            lambda: self._send_protocol_command(DIAG_CMD_GET_HEALTH, "HEALTH")
+        )
+        self.diag_error_btn.clicked.connect(
+            lambda: self._send_protocol_command(DIAG_CMD_GET_ERROR_COUNTERS, "ERRORS")
+        )
+        self.diag_buffer_btn.clicked.connect(
+            lambda: self._send_protocol_command(DIAG_CMD_GET_BUFFER_STATS, "BUFFERS")
+        )
+        self.diag_last_btn.clicked.connect(
+            lambda: self._send_protocol_command(DIAG_CMD_GET_LAST_RECORDS, "LAST_RECORDS")
+        )
+        self.diag_timing_btn.clicked.connect(
+            lambda: self._send_protocol_command(DIAG_CMD_GET_TIMING_STATS, "TIMING")
+        )
+        self.diag_pipeline_btn.clicked.connect(
+            lambda: self._send_protocol_command(DIAG_CMD_GET_PIPELINE_STATS, "PIPELINE")
+        )
+        self.diag_clear_btn.clicked.connect(
+            lambda: self._send_protocol_command(DIAG_CMD_CLEAR_COUNTERS, "CLEAR_COUNTERS")
         )
 
         self.proto_auto_poll_check.stateChanged.connect(self._on_protocol_auto_poll_changed)

@@ -123,6 +123,9 @@ typedef struct
     uint32_t not_found_count;
     uint32_t error_count;
 
+    uint32_t last_run_us;
+    uint32_t max_run_us;
+
     uint8_t last_cmd;
     uint8_t last_snapshot_id;
     uint8_t last_event_id;
