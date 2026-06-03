@@ -22,91 +22,16 @@ Dialog DLL:      TCM.DLL V1.48.0.0
  
 <h2>Project:</h2>
 D:\workspace_fgl\demo_h7\fgl_demo\dm-mc02-h723-framework\firmware\app\MDK-ARM\dm_mc02_h723_app.uvprojx
-Project File Date:  06/02/2026
+Project File Date:  06/03/2026
 
 <h2>Output:</h2>
 *** Using Compiler 'V6.15', folder: 'D:\KEIL\ARM\ARMCLANG\Bin'
 Build target 'dm_mc02_h723_app'
-../App/app_main.c(192): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           now,
-           ^~~
-../App/app_main.c(193): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rx_bytes,
-           ^~~~~~~~~~
-../App/app_main.c(196): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rb_write_bytes,
-           ^~~~~~~~~~~~~~~~
-../App/app_main.c(197): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rb_read_bytes,
-           ^~~~~~~~~~~~~~~
-../App/app_main.c(198): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rx_ring_overflow,
-           ^~~~~~~~~~~~~~~~~~
-../App/app_main.c(199): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rb_overflow_count,
-           ^~~~~~~~~~~~~~~~~~~
-../App/app_main.c(201): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rx_half_count,
-           ^~~~~~~~~~~~~~~
-../App/app_main.c(202): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rx_full_count,
-           ^~~~~~~~~~~~~~~
-../App/app_main.c(203): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rx_idle_count,
-           ^~~~~~~~~~~~~~~
-../App/app_main.c(204): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           s.rx_error_count,
-           ^~~~~~~~~~~~~~~~
-../App/app_main.c(205): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           c->mode,
-           ^~~~~~~
-../App/app_main.c(206): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           c->read_bytes,
-           ^~~~~~~~~~~~~
-../App/app_main.c(207): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           c->mismatch_count,
-           ^~~~~~~~~~~~~~~~~
-../App/app_main.c(208): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-           c->estimated_drop_bytes,
-           ^~~~~~~~~~~~~~~~~~~~~~~
-../App/app_main.c(478): warning: implicit declaration of function 'HAL_RCC_GetSysClockFreq' is invalid in C99 [-Wimplicit-function-declaration]
-    printf("  SYSCLK = %lu Hz\r\n", HAL_RCC_GetSysClockFreq());
-                                    ^
-../App/app_main.c(478): warning: format specifies type 'unsigned long' but the argument has type 'int' [-Wformat]
-    printf("  SYSCLK = %lu Hz\r\n", HAL_RCC_GetSysClockFreq());
-                       ~~~          ^~~~~~~~~~~~~~~~~~~~~~~~~
-                       %d
-../App/app_main.c(479): warning: implicit declaration of function 'HAL_RCC_GetHCLKFreq' is invalid in C99 [-Wimplicit-function-declaration]
-    printf("  HCLK   = %lu Hz\r\n", HAL_RCC_GetHCLKFreq());
-                                    ^
-../App/app_main.c(479): warning: format specifies type 'unsigned long' but the argument has type 'int' [-Wformat]
-    printf("  HCLK   = %lu Hz\r\n", HAL_RCC_GetHCLKFreq());
-                       ~~~          ^~~~~~~~~~~~~~~~~~~~~
-                       %d
-../App/app_main.c(480): warning: implicit declaration of function 'HAL_RCC_GetPCLK1Freq' is invalid in C99 [-Wimplicit-function-declaration]
-    printf("  PCLK1  = %lu Hz\r\n", HAL_RCC_GetPCLK1Freq());
-                                    ^
-../App/app_main.c(480): warning: format specifies type 'unsigned long' but the argument has type 'int' [-Wformat]
-    printf("  PCLK1  = %lu Hz\r\n", HAL_RCC_GetPCLK1Freq());
-                       ~~~          ^~~~~~~~~~~~~~~~~~~~~~
-                       %d
-../App/app_main.c(481): warning: implicit declaration of function 'HAL_RCC_GetPCLK2Freq' is invalid in C99 [-Wimplicit-function-declaration]
-    printf("  PCLK2  = %lu Hz\r\n", HAL_RCC_GetPCLK2Freq());
-                                    ^
-../App/app_main.c(481): warning: format specifies type 'unsigned long' but the argument has type 'int' [-Wformat]
-    printf("  PCLK2  = %lu Hz\r\n", HAL_RCC_GetPCLK2Freq());
-                       ~~~          ^~~~~~~~~~~~~~~~~~~~~~
-                       %d
-../App/app_main.c(488): warning: format specifies type 'unsigned long' but the argument has type 'uint32_t' (aka 'unsigned int') [-Wformat]
-    printf("  HAL_GetTick = %lu ms\r\n", PlatformTime_GetMs());
-                            ~~~          ^~~~~~~~~~~~~~~~~~~~
-                            %u
-23 warnings generated.
-compiling app_main.c...
+compiling mcu_info_app.c...
 linking...
-Program Size: Code=35636 RO-data=2644 RW-data=20 ZI-data=6580  
+Program Size: Code=37532 RO-data=2716 RW-data=20 ZI-data=8236  
 FromELF: creating hex file...
-"dm_mc02_h723_app\dm_mc02_h723_app.axf" - 0 Error(s), 23 Warning(s).
+"dm_mc02_h723_app\dm_mc02_h723_app.axf" - 0 Error(s), 0 Warning(s).
 
 <h2>Software Packages used:</h2>
 

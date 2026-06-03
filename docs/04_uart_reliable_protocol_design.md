@@ -58,19 +58,36 @@ V5: Security / HMAC / Encryption Extension
 
 ## 3. 当前架构决策
 
-当前协议架构的核心决策：
+当前协议架构的核心决策已经从早期的 `CommandManager -> McuInfoApp_HandleCommand()`，重构为 **CommandService 命令注册表架构**：
 
 ```text
 1. ProtocolFrame 只负责帧格式、编码、解码、CRC、Parser 状态机
 2. ProtocolFrame 不定义具体业务命令
 3. ProtocolManager 只负责 UART 字节流接入、帧解析、帧发送
-4. CommandManager 负责 PC 命令与 MCU 事件的语义出口
-5. McuInfoApp 是 MCU 与 PC 信息交互的中心 App
-6. 其他 App 不直接操作 CommandManager / ProtocolManager
-7. 其他 App 若需要与 PC 通信，先向 McuInfoApp 上报事件或快照
-8. McuInfoApp 使用 RingBuffer 缓存内部事件
-9. CommandManager 使用 RingBuffer 缓存待发送 EVENT
-10. ProtocolManager 从 CommandManager 取 EVENT，再封装为 EVENT 帧发送给 PC
+4. CommandManager 负责 REQ / RESP / NACK / EVENT 的语义流程
+5. CommandService 负责统一命令表、命令注册、命令分发和响应辅助封装
+6. McuInfoApp 是 MCU 与 PC 信息交互中心 App，同时作为 App handler 与 CommandService 的“牵手入口”
+7. 具体命令 handler 集成在各自 App 内部，不堆到 CommandManager / ProtocolManager 中
+8. 其他 App 不直接操作 CommandManager / ProtocolManager
+9. 其他 App 若需要与 PC 交互，通过 McuInfoApp 注册命令、更新快照或上报事件
+10. McuInfoApp 使用 RingBuffer 缓存内部事件
+11. CommandManager 使用 RingBuffer 缓存待发送 EVENT
+12. ProtocolManager 从 CommandManager 取 EVENT，再封装为 EVENT 帧发送给 PC
+```
+
+当前三类已落地的信息通路：
+
+```text
+CMD       PC -> MCU       请求、配置、控制、查询
+EVENT     MCU -> PC       离散事件主动上报
+SNAPSHOT  MCU 内部缓存     保存最近状态，PC 通过 CMD 查询
+```
+
+后续预留两类增强通路：
+
+```text
+STREAM    MCU -> PC       高频实时数据流，例如 IMU / 控制环 / ADC 波形
+BULK      双向/单向        大块可靠传输，例如固件升级、日志 dump、参数导入导出
 ```
 
 因此，主动上报 EVENT 不允许 App 直接调用 ProtocolManager 发送。
@@ -97,7 +114,35 @@ ProtocolManager sends EVENT frame
 PC Tool
 ```
 
----
+命令注册与响应路径是：
+
+```text
+App internal handler
+  ↓ register through
+McuInfoApp_RegisterCommand()
+  ↓
+CommandService_Register()
+  ↓
+CommandService command table
+```
+
+PC 查询时：
+
+```text
+PC REQ
+  ↓
+ProtocolManager
+  ↓
+CommandManager_Dispatch()
+  ↓
+CommandService_Dispatch()
+  ↓
+cmd -> handler
+  ↓
+App internal handler fills CommandManagerResponse_t
+  ↓
+ProtocolManager sends RESP / NACK
+```
 
 ## 4. Protocol Layering
 
@@ -112,9 +157,11 @@ ProtocolManager
   ↓
 CommandManager
   ↓
-McuInfoApp
+CommandService
   ↓
-Other Apps / Platform / Board
+App internal command handler
+  ↓
+McuInfoApp snapshot / event / provider / Platform / Board
 ```
 
 ### 4.2 数据接收路径
@@ -134,7 +181,11 @@ ProtocolFrame_t
   ↓
 CommandManager_Dispatch()
   ↓
-McuInfoApp_HandleCommand()
+CommandService_Dispatch()
+  ↓
+cmd table lookup
+  ↓
+App internal handler
   ↓
 CommandManagerResponse_t
   ↓
@@ -163,7 +214,23 @@ EVENT frame
 PC Tool
 ```
 
----
+### 4.4 快照查询路径
+
+```text
+Platform / App captures state
+  ↓
+McuInfoApp_UpdateSnapshot() / specialized snapshot API
+  ↓
+McuInfoApp snapshot store
+  ↓
+PC sends GET_xxx_INFO / GET_xxx_STATS
+  ↓
+App handler reads snapshot
+  ↓
+RESP returns latest cached state
+```
+
+示例：`GET_RESET_INFO` 使用启动阶段捕获的 reset snapshot，而不是 PC 查询时重新读取 RCC reset flags。
 
 ## 5. 各模块职责
 
@@ -248,11 +315,11 @@ firmware/app/Services/command_manager.c
 ```text
 1. 作为 PC 命令与 MCU 事件的语义出口
 2. 接收 ProtocolManager 下发的 REQ
-3. 将命令统一转发给 McuInfoApp_HandleCommand()
+3. 将 REQ 统一转发给 CommandService_Dispatch()
 4. 接收 McuInfoApp_Run() 提交的 EVENT
 5. 使用 RingBuffer 缓存待发送 EVENT
 6. 提供 CommandManager_TryGetPendingEvent() 给 ProtocolManager
-7. 维护命令路由统计、事件队列统计、错误统计
+7. 维护命令分发统计、事件队列统计、错误统计
 ```
 
 不允许做：
@@ -261,12 +328,54 @@ firmware/app/Services/command_manager.c
 1. 不直接访问 Platform
 2. 不直接读取 UART / Reset / Fault / Time
 3. 不主动发送协议帧
-4. 不绕过 McuInfoApp 处理其他 App 的信息
+4. 不实现具体命令 handler
+5. 不直接调用 McuInfoApp_HandleCommand() 这类业务 switch
 ```
 
 ---
 
-### 5.4 McuInfoApp
+### 5.4 CommandService
+
+位置：
+
+```text
+firmware/app/Services/command_service.h
+firmware/app/Services/command_service.c
+```
+
+职责：
+
+```text
+1. 维护统一命令注册表
+2. 提供 CommandService_Register()
+3. 提供 CommandService_Dispatch()
+4. 根据 cmd 查找 handler / ctx / name / category / flags
+5. 调用各 App 内部注册的 handler
+6. 提供 CommandService_SetResp() / CommandService_SetNack() 辅助封装
+7. 维护 init / register / dispatch / unknown / handler_error 等统计
+8. 支持 GET_COMMAND_STATS 观测命令
+```
+
+不允许做：
+
+```text
+1. 不实现具体业务命令逻辑
+2. 不直接访问 Platform
+3. 不直接发送协议帧
+4. 不管理 EVENT 队列
+```
+
+设计规则：
+
+```text
+CommandService 可以作为较大的命令注册与分发表。
+具体 handler 应集成在各自 App 内部。
+普通 App 推荐通过 McuInfoApp_RegisterCommand() 进入 CommandService，而不是直接接触 CommandManager / ProtocolManager。
+```
+
+---
+
+### 5.5 McuInfoApp
 
 位置：
 
@@ -279,14 +388,16 @@ firmware/app/Apps/mcu_info_app.c
 
 ```text
 1. 作为 MCU 与 PC 信息交互的中心 App
-2. 处理 PC 查询类命令
-3. 接收其他 App / 模块上报的事件
-4. 接收其他 App / 模块更新的快照
-5. 使用 RingBuffer 缓存内部事件
-6. 在 McuInfoApp_Run() 中节流、聚合、转发事件到 CommandManager
-7. 对外提供 McuInfoApp_PostEvent()
-8. 对外提供 McuInfoApp_UpdateSnapshot()
-9. 对外提供 McuInfoApp_UpdateRuntimeStatus()
+2. 作为其他 App command handler 与 CommandService 的牵手入口
+3. 对外提供 McuInfoApp_RegisterCommand()
+4. 接收其他 App / 模块上报的事件
+5. 接收其他 App / 模块更新的快照
+6. 使用 RingBuffer 缓存内部事件
+7. 在 McuInfoApp_Run() 中节流、聚合、转发事件到 CommandManager
+8. 对外提供 McuInfoApp_PostEvent()
+9. 对外提供 McuInfoApp_UpdateSnapshot()
+10. 对外提供 McuInfoApp_UpdateRuntimeStatus()
+11. 当前基础命令 handler 暂时集成在 mcu_info_app.c 内部，并通过 McuInfoApp_RegisterCommand() 挂入 CommandService
 ```
 
 当前支持命令：
@@ -295,28 +406,31 @@ firmware/app/Apps/mcu_info_app.c
 PING
 GET_VERSION
 GET_STATUS
+GET_RESET_INFO
 GET_TIME_INFO
 GET_UART_STATS
 GET_APP_STATS
+GET_COMMAND_STATS
 ```
 
 当前预留命令：
 
 ```text
-GET_RESET_INFO
 GET_FAULT_INFO
 ```
 
 设计原则：
 
 ```text
-其他 App 若需要与 PC 交互，不能直接调用 CommandManager 或 ProtocolManager，
-而是向 McuInfoApp 上报事件或快照。
+其他 App 若需要与 PC 交互，不能直接调用 CommandManager 或 ProtocolManager。
+普通 App 的命令 handler 可以在自己 App 内部实现，但应通过 McuInfoApp_RegisterCommand() 进行挂载。
+App 主动上报使用 McuInfoApp_PostEvent()。
+当前状态缓存使用 McuInfoApp_UpdateSnapshot()。
 ```
 
 ---
 
-### 5.5 RingBuffer Middleware
+### 5.6 RingBuffer Middleware
 
 位置：
 
@@ -352,8 +466,6 @@ typedef struct
 入队时将整个结构体作为字节块写入 RingBuffer。
 
 出队时必须确保 RingBuffer 中至少存在一个完整记录长度。
-
----
 
 ## 6. UART DMA Receive Design
 
@@ -585,22 +697,55 @@ V1 可以先保留字段但不全部使用。
 
 具体命令 ID 不在 ProtocolFrame 层定义。
 
-当前命令 ID 由 McuInfoApp 管理：
+当前命令 ID 由 CommandService 统一注册和分发。当前基础命令 handler 由 McuInfoApp 内部实现，并通过 `McuInfoApp_RegisterCommand()` 挂载到 CommandService。
 
-| Command                     |  Value | Direction | Description               |
-| --------------------------- | -----: | --------- | ------------------------- |
-| MCU_INFO_CMD_PING           | `0x01` | PC → MCU  | Communication test        |
-| MCU_INFO_CMD_GET_VERSION    | `0x02` | PC → MCU  | Get firmware version      |
-| MCU_INFO_CMD_GET_STATUS     | `0x03` | PC → MCU  | Get runtime status        |
-| MCU_INFO_CMD_GET_RESET_INFO | `0x04` | PC → MCU  | Get reset information     |
-| MCU_INFO_CMD_GET_TIME_INFO  | `0x05` | PC → MCU  | Get tick information      |
-| MCU_INFO_CMD_GET_FAULT_INFO | `0x06` | PC → MCU  | Get fault information     |
-| MCU_INFO_CMD_GET_UART_STATS | `0x07` | PC → MCU  | Get UART RX statistics    |
-| MCU_INFO_CMD_GET_APP_STATS  | `0x08` | PC → MCU  | Get McuInfoApp statistics |
+当前已实现命令：
 
-后续如果引入其他 App，不直接暴露给 CommandManager，而是先通过 McuInfoApp 聚合或代理。
+| Command                          |  Value | Direction | Description                    |
+| -------------------------------- | -----: | --------- | ------------------------------ |
+| MCU_INFO_CMD_PING                | `0x01` | PC → MCU  | Communication test             |
+| MCU_INFO_CMD_GET_VERSION         | `0x02` | PC → MCU  | Get firmware version           |
+| MCU_INFO_CMD_GET_STATUS          | `0x03` | PC → MCU  | Get runtime status             |
+| MCU_INFO_CMD_GET_RESET_INFO      | `0x04` | PC → MCU  | Get reset information snapshot |
+| MCU_INFO_CMD_GET_TIME_INFO       | `0x05` | PC → MCU  | Get tick information           |
+| MCU_INFO_CMD_GET_FAULT_INFO      | `0x06` | PC → MCU  | Reserved, fault integration next |
+| MCU_INFO_CMD_GET_UART_STATS      | `0x07` | PC → MCU  | Get UART RX statistics         |
+| MCU_INFO_CMD_GET_APP_STATS       | `0x08` | PC → MCU  | Get McuInfoApp statistics      |
+| MCU_INFO_CMD_GET_COMMAND_STATS   | `0x0D` | PC → MCU  | Get CommandService statistics  |
 
----
+`GET_COMMAND_STATS` 当前 payload 为 ASCII，示例：
+
+```text
+init=1,reg=10,disp=7,unk=0,err=0,last=0x0D
+```
+
+字段含义：
+
+| Field | Meaning                                |
+| ----- | -------------------------------------- |
+| init  | CommandService 初始化次数              |
+| reg   | 当前注册命令数量                       |
+| disp  | 已分发命令次数                         |
+| unk   | 未知命令计数                           |
+| err   | handler 错误计数                       |
+| last  | 最近一次处理的命令 ID                  |
+
+后续命令分类规划：
+
+| Range       | Category  | Future Usage                         |
+| ----------- | --------- | ------------------------------------ |
+| `0x01~0x1F` | System / Info | 基础信息、系统状态、统计查询       |
+| `0x20~0x2F` | Diagnostic | 诊断、Trace、Buffer、健康监控       |
+| `0x30~0x3F` | IMU / Algo | IMU、滤波、算法闭环                 |
+| `0x40~0x4F` | FDCAN      | CAN 状态、报文、诊断                 |
+| `0x50~0x5F` | Parameter  | 参数管理、Flash 保存、导入导出       |
+| `0x60~0x6F` | Boot       | Bootloader、固件升级                 |
+| `0x70~0x7F` | Security   | Challenge、HMAC、认证、防重放        |
+| `0x80~0x8F` | Power / HW | 低功耗、硬件诊断                     |
+| `0x90~0x9F` | Chaos Test | 异常注入、自动化测试                 |
+| `0xF0~0xFF` | Debug      | 调试保留                             |
+
+后续如果引入其他 App，具体 handler 可以集成在对应 App 内部，但应通过 McuInfoApp 牵手注册到 CommandService。
 
 ## 11. Event ID Design
 
@@ -721,7 +866,7 @@ Payload 不完整：
 
 ---
 
-## 14. Command / Event Processing Model
+## 14. Command / Event / Snapshot Processing Model
 
 ### 14.1 PC 查询模型
 
@@ -732,11 +877,24 @@ ProtocolManager parses frame
   ↓
 CommandManager_Dispatch()
   ↓
-McuInfoApp_HandleCommand()
+CommandService_Dispatch()
+  ↓
+cmd table lookup
+  ↓
+App internal handler
   ↓
 CommandManagerResponse_t
   ↓
 ProtocolManager sends RESP / NACK
+```
+
+该模型的核心规则：
+
+```text
+CommandManager 不实现具体业务命令。
+CommandService 只维护表和分发，不实现具体业务逻辑。
+具体 handler 集成在各自 App 内部。
+McuInfoApp 提供 McuInfoApp_RegisterCommand() 作为牵手入口。
 ```
 
 ### 14.2 MCU 主动上报模型
@@ -766,12 +924,59 @@ PC Tool
 ```text
 App 不直接调用 ProtocolManager。
 其他 App 不直接调用 CommandManager。
-所有对 PC 的信息出口必须进入 McuInfoApp。
+所有主动上报必须进入 McuInfoApp。
 CommandManager 管理语义队列。
 ProtocolManager 只做帧发送。
 ```
 
----
+### 14.3 Snapshot 查询模型
+
+Snapshot 表示“最近状态缓存”，不是实时数据流。
+
+```text
+App / Platform captures current state
+  ↓
+McuInfoApp_UpdateSnapshot() or specialized update API
+  ↓
+McuInfoApp snapshot store
+  ↓
+PC sends GET_xxx_INFO / GET_xxx_STATS
+  ↓
+App handler reads latest snapshot
+  ↓
+RESP returns latest state
+```
+
+适合使用 Snapshot 的信息：
+
+```text
+1. Reset info：启动早期捕获，后续 RCC flags 会被清除
+2. Fault info：故障现场需要保留，后续 PC 查询最近一次 fault
+3. IMU / CAN / Power 最近状态：后续阶段可按周期更新
+4. 复杂统计信息：避免 PC 查询时进行重计算
+```
+
+不适合使用 Snapshot 的命令：
+
+```text
+PING / GET_TIME_INFO / PARAM_SET / ENTER_BOOTLOADER / TRIGGER_RESET
+```
+
+这些命令可由 handler 直接实时执行。
+
+### 14.4 Stream / Bulk 预留模型
+
+后续通信模型将扩展为五类：
+
+```text
+CMD       PC -> MCU       请求、配置、控制、查询
+EVENT     MCU -> PC       离散重要事件
+SNAPSHOT  MCU 内部缓存     最近状态，PC 通过 CMD 查询
+STREAM    MCU -> PC       高频实时数据流，例如 IMU / 控制环 / ADC 波形
+BULK      双向/单向        大块可靠传输，例如固件升级、日志、参数表
+```
+
+当前 Stage 2 V1 已实现 CMD / EVENT / SNAPSHOT 基础能力，STREAM 与 BULK 后续实现。
 
 ## 15. Reliability Mechanism Roadmap
 
@@ -926,7 +1131,9 @@ firmware/app/
 │   ├── protocol_manager.h
 │   ├── protocol_manager.c
 │   ├── command_manager.h
-│   └── command_manager.c
+│   ├── command_manager.c
+│   ├── command_service.h
+│   └── command_service.c
 │
 ├── Apps/
 │   ├── mcu_info_app.h
@@ -967,27 +1174,32 @@ pc_tool/
 
 ## 17. Stage 2 Implementation Plan
 
-推荐实现顺序：
+推荐实现顺序与当前进度：
 
-| Step | Task                     | Output                                        |
-| ---- | ------------------------ | --------------------------------------------- |
-| 2.1  | Protocol design document | `docs/04_uart_reliable_protocol_design.md`    |
-| 2.2  | RingBuffer middleware    | `ring_buffer.h/.c`                            |
-| 2.3  | CRC16 middleware         | `crc16.h/.c`                                  |
-| 2.4  | Generic state machine    | `state_machine.h/.c`                          |
-| 2.5  | UART DMA RX path         | `platform_uart` RX extension                  |
-| 2.6  | Protocol frame parser    | `protocol_frame.h/.c`                         |
-| 2.7  | Protocol Manager         | `protocol_manager.h/.c`                       |
-| 2.8  | Command Manager          | `command_manager.h/.c`                        |
-| 2.9  | McuInfoApp               | `mcu_info_app.h/.c`                           |
-| 2.10 | Basic commands           | PING / GET_VERSION / GET_STATUS               |
-| 2.11 | EVENT path               | McuInfoApp → CommandManager → ProtocolManager |
-| 2.12 | Python PC Tool           | ping / command / robust / event listen        |
-| 2.13 | Robustness test          | half packet / sticky packet / CRC error       |
-| 2.14 | Reliability V2           | ACK / NACK / timeout / retry                  |
-| 2.15 | Sliding window V3        | small window for data transfer                |
+| Step | Task                     | Status | Output                                        |
+| ---- | ------------------------ | ------ | --------------------------------------------- |
+| 2.1  | Protocol design document | Done   | `docs/04_uart_reliable_protocol_design.md`    |
+| 2.2  | RingBuffer middleware    | Done   | `ring_buffer.h/.c`                            |
+| 2.3  | CRC16 middleware         | Done   | `crc16.h/.c`                                  |
+| 2.4  | Generic state machine    | Done   | `state_machine.h/.c`                          |
+| 2.5  | UART DMA RX path         | Done   | `platform_uart` RX extension                  |
+| 2.6  | Protocol frame parser    | Done   | `protocol_frame.h/.c`                         |
+| 2.7  | Protocol Manager         | Done   | `protocol_manager.h/.c`                       |
+| 2.8  | Command Manager          | Done   | `command_manager.h/.c`                        |
+| 2.9  | McuInfoApp               | Done   | `mcu_info_app.h/.c`                           |
+| 2.10 | Basic commands           | Done   | PING / VERSION / STATUS / TIME / UART / APP   |
+| 2.11 | EVENT path               | Done   | McuInfoApp → CommandManager → ProtocolManager |
+| 2.12 | Python PC Tool           | Done   | ping / command / robust / event listen        |
+| 2.13 | Async EVENT compatibility| Done   | Command/robust tests ignore asynchronous EVENT |
+| 2.14 | RESET snapshot integration | Done | GET_RESET_INFO returns real reset snapshot    |
+| 2.15 | CommandService registry refactor | Done | CommandService + App handler registration     |
+| 2.16 | CommandService observability | Done | GET_COMMAND_STATS + Python command test       |
+| 2.17 | Fault snapshot/event integration | Next | GET_FAULT_INFO + fault event                  |
+| 2.18 | Reliability V2           | Planned | ACK / NACK / timeout / retry                  |
+| 2.19 | Sliding window V3        | Planned | small window for data transfer                |
+```
 
----
+当前 Stage 2 V1 的主要链路已经闭环，后续进入 Fault 集成与 V2 可靠性增强。
 
 ## 18. Stage 2 Test Plan
 
@@ -1000,7 +1212,9 @@ pc_tool/
 4. PC sends GET_TIME_INFO, MCU returns tick
 5. PC sends GET_UART_STATS, MCU returns UART stats
 6. PC sends GET_APP_STATS, MCU returns McuInfoApp stats
-7. PC sends invalid CMD, MCU returns UNKNOWN_CMD
+7. PC sends GET_RESET_INFO, MCU returns real reset snapshot
+8. PC sends GET_COMMAND_STATS, MCU returns CommandService stats
+9. PC sends invalid CMD, MCU returns UNKNOWN_CMD
 ```
 
 ### 18.2 Frame Parser 健壮性测试
@@ -1036,9 +1250,21 @@ pc_tool/
 6. PC event listener can parse EVENT frame
 7. Event RingBuffer high watermark can be observed
 8. Event queue full condition increments drop counter
+9. PC command tests can still pass while EVENT frames are mixed in
 ```
 
-### 18.5 可靠性测试
+### 18.5 CommandService 测试
+
+```text
+1. CommandService_Init() is idempotent
+2. McuInfoApp_RegisterCommand() can mount built-in handlers
+3. CommandService_Dispatch() can find registered handlers
+4. Unknown commands return NACK UNKNOWN_CMD
+5. GET_COMMAND_STATS returns init / reg / disp / unk / err / last fields
+6. Payload length matches valid ASCII string length and does not include stack garbage
+```
+
+### 18.6 可靠性测试
 
 ```text
 1. SEQ matches request and response
@@ -1048,29 +1274,40 @@ pc_tool/
 5. Sliding window cumulative ACK works in V3
 ```
 
----
-
 ## 19. Stage 2 Acceptance Criteria
 
-Stage 2 V1 完成标准：
+Stage 2 V1 当前完成标准：
 
 ```text
-1. UART RX DMA can receive continuous bytes
-2. RX RingBuffer works
-3. Frame parser can recover valid frames from byte stream
-4. CRC16 can detect corrupted frames
-5. PING / GET_VERSION / GET_STATUS work
-6. McuInfoApp can handle PC query commands
-7. McuInfoApp can post internal events
-8. CommandManager can cache pending events
-9. ProtocolManager can send EVENT frames
-10. PC Python tool can send commands and parse responses
-11. PC Python event listener can receive EVENT frames
-12. Half packet / sticky packet / garbage bytes can be handled
-13. Protocol statistics can be printed or queried
+1. UART RX DMA can receive continuous bytes —— Done
+2. RX RingBuffer works —— Done
+3. Frame parser can recover valid frames from byte stream —— Done
+4. CRC16 can detect corrupted frames —— Done
+5. PING / GET_VERSION / GET_STATUS work —— Done
+6. GET_TIME_INFO / GET_UART_STATS / GET_APP_STATS work —— Done
+7. GET_RESET_INFO returns real reset snapshot —— Done
+8. GET_COMMAND_STATS returns CommandService stats —— Done
+9. McuInfoApp can register command handlers into CommandService —— Done
+10. McuInfoApp can post internal events —— Done
+11. CommandManager can cache pending events —— Done
+12. ProtocolManager can send EVENT frames —— Done
+13. PC Python tool can send commands and parse responses —— Done
+14. PC Python event listener can receive EVENT frames —— Done
+15. Half packet / sticky packet / garbage bytes can be handled —— Done
+16. Async EVENT mixed with command response does not break PC tests —— Done
+17. Protocol statistics can be printed or queried —— Done
 ```
 
-Stage 2 增强阶段完成标准：
+Stage 2 V1 剩余增强项：
+
+```text
+1. GET_FAULT_INFO 接入真实 fault snapshot/event —— Next
+2. 协议栈空间占用优化 —— Planned
+3. CommandService 命令列表查询 —— Planned
+4. UI 增加 GET_COMMAND_STATS 按钮 —— Optional
+```
+
+Stage 2 V2 增强阶段完成标准：
 
 ```text
 1. SEQ request-response matching works
@@ -1079,8 +1316,6 @@ Stage 2 增强阶段完成标准：
 4. Duplicate detection works
 5. Small sliding window design is implemented or partially implemented
 ```
-
----
 
 ## 20. Design Rules
 
@@ -1095,9 +1330,11 @@ Stage 2 增强阶段完成标准：
 6. ProtocolManager 不处理业务命令
 7. CommandManager 不直接操作 UART
 8. CommandManager 不直接读取 Platform 数据
-9. McuInfoApp 是 MCU 与 PC 信息交互中心
-10. 其他 App 不直接调用 CommandManager / ProtocolManager
-11. 其他 App 通过 McuInfoApp_PostEvent / UpdateSnapshot 与 PC 间接交互
+9. CommandService 只管理命令表和分发，不实现具体业务逻辑
+10. 具体命令 handler 集成在各自 App 内部
+11. McuInfoApp 是 MCU 与 PC 信息交互中心，也是 App handler 与 CommandService 的牵手入口
+12. 其他 App 不直接调用 CommandManager / ProtocolManager
+13. 其他 App 通过 McuInfoApp_RegisterCommand / PostEvent / UpdateSnapshot 与 PC 间接交互
 12. 所有错误必须有计数器
 13. 所有 buffer 必须有 high watermark 和 overflow 统计
 14. 所有可靠性机制必须可关闭或分阶段启用
@@ -1124,9 +1361,39 @@ Stage 2 增强阶段完成标准：
 8. 使用 RingBuffer 实现 CommandManager 待发送 EVENT 队列
 9. 使用通用状态机框架承载 Frame Parser 和后续升级状态机
 10. ProtocolFrame 不定义具体业务命令
-11. CommandManager 只做命令/事件语义管理
-12. McuInfoApp 作为 MCU 信息中枢 App
-13. 第一版实现 REQ / RESP / NACK / EVENT
-14. 第二版加入 ACK / retry
-15. 第三版加入 small sliding window
+11. ProtocolManager 只负责协议帧收发
+12. CommandManager 只负责 REQ/RESP/NACK/EVENT 语义流程
+13. CommandService 作为统一命令注册表和分发器
+14. 具体命令 handler 集成在各自 App 内部
+15. McuInfoApp 作为 MCU 信息中枢 App，并提供命令挂载、事件、快照接口
+16. 第一版实现 REQ / RESP / NACK / EVENT
+17. Snapshot 定位为最近状态缓存，PC 通过 CMD 查询
+18. Stream 定位为后续高频实时数据流通道
+19. Bulk 定位为后续大块可靠传输通道
+20. 第二版加入 ACK / retry
+21. 第三版加入 small sliding window
+```
+
+当前已完成的重要重构：
+
+```text
+CommandManager -> CommandService_Dispatch() -> App internal handler
+```
+
+不再采用：
+
+```text
+CommandManager -> McuInfoApp_HandleCommand() switch-case
+```
+
+当前已验证命令包括：
+
+```text
+PING / VERSION / STATUS / TIME / UART_STATS / APP_STATS / RESET_INFO / COMMAND_STATS
+```
+
+下一步：
+
+```text
+GET_FAULT_INFO snapshot + fault event integration
 ```

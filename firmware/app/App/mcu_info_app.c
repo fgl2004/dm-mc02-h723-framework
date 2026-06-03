@@ -5,6 +5,7 @@
 
 #include "platform_time.h"
 #include "platform_uart.h"
+#include "platform_reset.h"
 #include "board_log.h"
 
 #include <stdio.h>
@@ -24,7 +25,7 @@
 typedef struct
 {
     uint8_t valid;
-    uint8_t app_id;
+    uint8_t snapshot_id;
     uint16_t snapshot_len;
     uint8_t snapshot_data[MCU_INFO_APP_MAX_SNAPSHOT_PAYLOAD_SIZE];
 } McuInfoSnapshotSlot_t;
@@ -34,9 +35,13 @@ typedef struct
     uint8_t initialized;
 
     McuInfoAppStats_t stats;
+
     McuInfoRuntimeStatus_t runtime_status;
 
-    McuInfoSnapshotSlot_t snapshots[4];
+    uint8_t reset_snapshot_valid;
+    PlatformResetInfo_t reset_snapshot;
+
+    McuInfoSnapshotSlot_t snapshots[MCU_INFO_APP_SNAPSHOT_SLOT_COUNT];
 
     RingBuffer_t event_rb;
     uint8_t event_storage[MCU_INFO_APP_EVENT_QUEUE_SIZE * sizeof(McuInfoEventRecord_t)];
@@ -46,39 +51,52 @@ typedef struct
 
 static McuInfoAppContext_t g_mcu_info_app;
 
-static void McuInfoApp_SetResp(McuInfoAppResponse_t *resp,
-                               uint8_t cmd,
-                               const uint8_t *payload,
-                               uint16_t payload_len);
+static int McuInfoApp_RegisterBuiltinCommands(void);
 
-static void McuInfoApp_SetNack(McuInfoAppResponse_t *resp,
-                               uint8_t cmd,
-                               uint8_t error_code);
+static int McuInfoApp_HandlePing(const ProtocolFrame_t *req_frame,
+                                 CommandManagerResponse_t *resp,
+                                 void *ctx);
 
-static void McuInfoApp_HandlePing(const ProtocolFrame_t *req_frame,
-                                  McuInfoAppResponse_t *resp);
+static int McuInfoApp_HandleGetVersion(const ProtocolFrame_t *req_frame,
+                                       CommandManagerResponse_t *resp,
+                                       void *ctx);
 
-static void McuInfoApp_HandleGetVersion(const ProtocolFrame_t *req_frame,
-                                        McuInfoAppResponse_t *resp);
+static int McuInfoApp_HandleGetStatus(const ProtocolFrame_t *req_frame,
+                                      CommandManagerResponse_t *resp,
+                                      void *ctx);
 
-static void McuInfoApp_HandleGetStatus(const ProtocolFrame_t *req_frame,
-                                       McuInfoAppResponse_t *resp);
+static int McuInfoApp_HandleGetResetInfo(const ProtocolFrame_t *req_frame,
+                                         CommandManagerResponse_t *resp,
+                                         void *ctx);
 
-static void McuInfoApp_HandleGetResetInfo(const ProtocolFrame_t *req_frame,
-                                          McuInfoAppResponse_t *resp);
+static int McuInfoApp_HandleGetTimeInfo(const ProtocolFrame_t *req_frame,
+                                        CommandManagerResponse_t *resp,
+                                        void *ctx);
 
-static void McuInfoApp_HandleGetTimeInfo(const ProtocolFrame_t *req_frame,
-                                         McuInfoAppResponse_t *resp);
+static int McuInfoApp_HandleGetFaultInfo(const ProtocolFrame_t *req_frame,
+                                         CommandManagerResponse_t *resp,
+                                         void *ctx);
 
-static void McuInfoApp_HandleGetFaultInfo(const ProtocolFrame_t *req_frame,
-                                          McuInfoAppResponse_t *resp);
+static int McuInfoApp_HandleGetUartStats(const ProtocolFrame_t *req_frame,
+                                         CommandManagerResponse_t *resp,
+                                         void *ctx);
 
-static void McuInfoApp_HandleGetUartStats(const ProtocolFrame_t *req_frame,
-                                          McuInfoAppResponse_t *resp);
+static int McuInfoApp_HandleGetAppStats(const ProtocolFrame_t *req_frame,
+                                        CommandManagerResponse_t *resp,
+                                        void *ctx);
 
-static void McuInfoApp_HandleGetAppStats(const ProtocolFrame_t *req_frame,
-                                         McuInfoAppResponse_t *resp);
+static int McuInfoApp_HandleGetEventStats(const ProtocolFrame_t *req_frame,
+                                          CommandManagerResponse_t *resp,
+                                          void *ctx);
 
+static const char *McuInfoApp_ResetCauseToShortString(PlatformResetCause_t cause);
+
+static void McuInfoApp_BuildResetInfoPayload(char *buf,
+                                             uint16_t buf_size,
+                                             const PlatformResetInfo_t *info);
+static int McuInfoApp_HandleGetCommandStats(const ProtocolFrame_t *req,
+                                            CommandManagerResponse_t *resp,
+                                            void *ctx);
 static int McuInfoApp_PopEvent(McuInfoEventRecord_t *event);
 static void McuInfoApp_RunEventForwarder(void);
 
@@ -93,6 +111,8 @@ void McuInfoApp_Init(void)
     g_mcu_info_app.initialized = 1U;
     g_mcu_info_app.stats.init_count++;
     g_mcu_info_app.last_event_forward_ms = PlatformTime_GetMs();
+
+    (void)McuInfoApp_RegisterBuiltinCommands();
 
     BoardLog_Info("McuInfoApp init OK\r\n");
 
@@ -121,87 +141,50 @@ void McuInfoApp_Run(void)
      * McuInfoApp is the central information app.
      *
      * It does not send EVENT frames directly through ProtocolManager.
-     * Instead, it forwards prepared events to CommandManager.
-     *
-     * CommandManager owns the pending PC-facing event queue.
-     * ProtocolManager later fetches events from CommandManager and sends them.
+     * It forwards prepared event records to CommandManager, and
+     * ProtocolManager later sends them as EVENT frames.
      */
     McuInfoApp_RunEventForwarder();
 }
 
-int McuInfoApp_HandleCommand(const ProtocolFrame_t *req_frame,
-                             McuInfoAppResponse_t *resp)
+int McuInfoApp_RegisterCommand(uint8_t cmd,
+                               CommandServiceHandler_t handler,
+                               void *ctx,
+                               const char *name,
+                               uint32_t flags)
 {
-    if ((req_frame == NULL) || (resp == NULL))
+    int ret;
+    uint8_t category;
+
+    if (handler == NULL)
     {
         g_mcu_info_app.stats.invalid_param_count++;
         g_mcu_info_app.stats.last_error = PROTO_ERROR_INVALID_PARAM;
         return MCU_INFO_APP_INVALID_PARAM;
     }
 
-    memset(resp, 0, sizeof(*resp));
+    category = CommandService_GetCategoryByCmd(cmd);
 
-    g_mcu_info_app.stats.dispatch_count++;
-    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
+    ret = CommandService_Register(cmd,
+                                  category,
+                                  flags,
+                                  handler,
+                                  ctx,
+                                  name);
 
-    if (g_mcu_info_app.initialized == 0U)
+    if (ret == COMMAND_SERVICE_OK)
     {
-        g_mcu_info_app.stats.error_count++;
-        g_mcu_info_app.stats.last_error = PROTO_ERROR_INVALID_STATE;
-
-        McuInfoApp_SetNack(resp,
-                           req_frame->cmd,
-                           PROTO_ERROR_INVALID_STATE);
-
-        return MCU_INFO_APP_ERROR;
+        g_mcu_info_app.stats.register_command_count++;
+        g_mcu_info_app.stats.last_cmd = cmd;
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+        return MCU_INFO_APP_OK;
     }
 
-    switch (req_frame->cmd)
-    {
-        case MCU_INFO_CMD_PING:
-            McuInfoApp_HandlePing(req_frame, resp);
-            break;
+    g_mcu_info_app.stats.register_command_fail_count++;
+    g_mcu_info_app.stats.last_cmd = cmd;
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_INTERNAL_ERROR;
 
-        case MCU_INFO_CMD_GET_VERSION:
-            McuInfoApp_HandleGetVersion(req_frame, resp);
-            break;
-
-        case MCU_INFO_CMD_GET_STATUS:
-            McuInfoApp_HandleGetStatus(req_frame, resp);
-            break;
-
-        case MCU_INFO_CMD_GET_RESET_INFO:
-            McuInfoApp_HandleGetResetInfo(req_frame, resp);
-            break;
-
-        case MCU_INFO_CMD_GET_TIME_INFO:
-            McuInfoApp_HandleGetTimeInfo(req_frame, resp);
-            break;
-
-        case MCU_INFO_CMD_GET_FAULT_INFO:
-            McuInfoApp_HandleGetFaultInfo(req_frame, resp);
-            break;
-
-        case MCU_INFO_CMD_GET_UART_STATS:
-            McuInfoApp_HandleGetUartStats(req_frame, resp);
-            break;
-
-        case MCU_INFO_CMD_GET_APP_STATS:
-            McuInfoApp_HandleGetAppStats(req_frame, resp);
-            break;
-
-        default:
-            g_mcu_info_app.stats.unknown_cmd_count++;
-            g_mcu_info_app.stats.last_error = PROTO_ERROR_UNKNOWN_CMD;
-
-            McuInfoApp_SetNack(resp,
-                               req_frame->cmd,
-                               PROTO_ERROR_UNKNOWN_CMD);
-
-            return MCU_INFO_APP_UNKNOWN_CMD;
-    }
-
-    return MCU_INFO_APP_OK;
+    return MCU_INFO_APP_ERROR;
 }
 
 int McuInfoApp_PostEvent(uint8_t app_id,
@@ -263,7 +246,7 @@ int McuInfoApp_PostEvent(uint8_t app_id,
     return MCU_INFO_APP_OK;
 }
 
-int McuInfoApp_UpdateSnapshot(uint8_t app_id,
+int McuInfoApp_UpdateSnapshot(uint8_t snapshot_id,
                               const uint8_t *snapshot_data,
                               uint16_t snapshot_len)
 {
@@ -281,7 +264,7 @@ int McuInfoApp_UpdateSnapshot(uint8_t app_id,
     for (i = 0U; i < (uint8_t)(sizeof(g_mcu_info_app.snapshots) / sizeof(g_mcu_info_app.snapshots[0])); i++)
     {
         if ((g_mcu_info_app.snapshots[i].valid != 0U) &&
-            (g_mcu_info_app.snapshots[i].app_id == app_id))
+            (g_mcu_info_app.snapshots[i].snapshot_id == snapshot_id))
         {
             slot = &g_mcu_info_app.snapshots[i];
             break;
@@ -310,7 +293,7 @@ int McuInfoApp_UpdateSnapshot(uint8_t app_id,
     memset(slot, 0, sizeof(*slot));
 
     slot->valid = 1U;
-    slot->app_id = app_id;
+    slot->snapshot_id = snapshot_id;
 
     copy_len = snapshot_len;
     if (copy_len > MCU_INFO_APP_MAX_SNAPSHOT_PAYLOAD_SIZE)
@@ -325,6 +308,106 @@ int McuInfoApp_UpdateSnapshot(uint8_t app_id,
     }
 
     g_mcu_info_app.stats.update_snapshot_count++;
+    g_mcu_info_app.stats.last_snapshot_id = snapshot_id;
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+
+    return MCU_INFO_APP_OK;
+}
+
+int McuInfoApp_GetSnapshot(uint8_t snapshot_id,
+                           uint8_t *out_buf,
+                           uint16_t out_buf_size,
+                           uint16_t *out_len)
+{
+    uint8_t i;
+    uint16_t copy_len;
+
+    if ((out_buf == NULL) || (out_len == NULL))
+    {
+        g_mcu_info_app.stats.invalid_param_count++;
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_INVALID_PARAM;
+        return MCU_INFO_APP_INVALID_PARAM;
+    }
+
+    *out_len = 0U;
+
+    for (i = 0U; i < (uint8_t)(sizeof(g_mcu_info_app.snapshots) / sizeof(g_mcu_info_app.snapshots[0])); i++)
+    {
+        if ((g_mcu_info_app.snapshots[i].valid != 0U) &&
+            (g_mcu_info_app.snapshots[i].snapshot_id == snapshot_id))
+        {
+            copy_len = g_mcu_info_app.snapshots[i].snapshot_len;
+
+            if (copy_len > out_buf_size)
+            {
+                copy_len = out_buf_size;
+            }
+
+            if (copy_len > 0U)
+            {
+                memcpy(out_buf,
+                       g_mcu_info_app.snapshots[i].snapshot_data,
+                       copy_len);
+            }
+
+            *out_len = copy_len;
+
+            g_mcu_info_app.stats.get_snapshot_count++;
+            g_mcu_info_app.stats.last_snapshot_id = snapshot_id;
+            g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+
+            return MCU_INFO_APP_OK;
+        }
+    }
+
+    g_mcu_info_app.stats.not_found_count++;
+    g_mcu_info_app.stats.last_snapshot_id = snapshot_id;
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_UNKNOWN_CMD;
+
+    return MCU_INFO_APP_NOT_FOUND;
+}
+
+int McuInfoApp_UpdateResetSnapshot(const PlatformResetInfo_t *reset_info)
+{
+    if (reset_info == NULL)
+    {
+        g_mcu_info_app.stats.invalid_param_count++;
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_INVALID_PARAM;
+        return MCU_INFO_APP_INVALID_PARAM;
+    }
+
+    g_mcu_info_app.reset_snapshot = *reset_info;
+    g_mcu_info_app.reset_snapshot_valid = 1U;
+
+    g_mcu_info_app.stats.update_reset_snapshot_count++;
+    g_mcu_info_app.stats.update_snapshot_count++;
+    g_mcu_info_app.stats.last_snapshot_id = MCU_INFO_SNAPSHOT_RESET_INFO;
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+
+    return MCU_INFO_APP_OK;
+}
+
+int McuInfoApp_GetResetSnapshot(PlatformResetInfo_t *reset_info)
+{
+    if (reset_info == NULL)
+    {
+        g_mcu_info_app.stats.invalid_param_count++;
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_INVALID_PARAM;
+        return MCU_INFO_APP_INVALID_PARAM;
+    }
+
+    if (g_mcu_info_app.reset_snapshot_valid == 0U)
+    {
+        g_mcu_info_app.stats.not_found_count++;
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_INVALID_STATE;
+        return MCU_INFO_APP_NOT_FOUND;
+    }
+
+    *reset_info = g_mcu_info_app.reset_snapshot;
+
+    g_mcu_info_app.stats.get_reset_snapshot_count++;
+    g_mcu_info_app.stats.get_snapshot_count++;
+    g_mcu_info_app.stats.last_snapshot_id = MCU_INFO_SNAPSHOT_RESET_INFO;
     g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
 
     return MCU_INFO_APP_OK;
@@ -364,179 +447,277 @@ void McuInfoApp_PrintStats(void)
     BoardLog_PrintSeparator();
 
     BoardLog_Info("McuInfoApp Stats:\r\n");
-    BoardLog_Info("  initialized           = %u\r\n", g_mcu_info_app.initialized);
-    BoardLog_Info("  init_count            = %lu\r\n", g_mcu_info_app.stats.init_count);
-    BoardLog_Info("  run_count             = %lu\r\n", g_mcu_info_app.stats.run_count);
-    BoardLog_Info("  dispatch_count        = %lu\r\n", g_mcu_info_app.stats.dispatch_count);
-    BoardLog_Info("  ping_count            = %lu\r\n", g_mcu_info_app.stats.ping_count);
-    BoardLog_Info("  get_version_count     = %lu\r\n", g_mcu_info_app.stats.get_version_count);
-    BoardLog_Info("  get_status_count      = %lu\r\n", g_mcu_info_app.stats.get_status_count);
-    BoardLog_Info("  get_reset_info_count  = %lu\r\n", g_mcu_info_app.stats.get_reset_info_count);
-    BoardLog_Info("  get_time_info_count   = %lu\r\n", g_mcu_info_app.stats.get_time_info_count);
-    BoardLog_Info("  get_fault_info_count  = %lu\r\n", g_mcu_info_app.stats.get_fault_info_count);
-    BoardLog_Info("  get_uart_stats_count  = %lu\r\n", g_mcu_info_app.stats.get_uart_stats_count);
-    BoardLog_Info("  get_app_stats_count   = %lu\r\n", g_mcu_info_app.stats.get_app_stats_count);
-    BoardLog_Info("  post_event_count      = %lu\r\n", g_mcu_info_app.stats.post_event_count);
-    BoardLog_Info("  event_forward_count   = %lu\r\n", g_mcu_info_app.stats.event_forward_count);
-    BoardLog_Info("  event_drop_count      = %lu\r\n", g_mcu_info_app.stats.event_drop_count);
-    BoardLog_Info("  update_snapshot_count = %lu\r\n", g_mcu_info_app.stats.update_snapshot_count);
-    BoardLog_Info("  update_status_count   = %lu\r\n", g_mcu_info_app.stats.update_status_count);
-    BoardLog_Info("  unknown_cmd_count     = %lu\r\n", g_mcu_info_app.stats.unknown_cmd_count);
-    BoardLog_Info("  invalid_param_count   = %lu\r\n", g_mcu_info_app.stats.invalid_param_count);
-    BoardLog_Info("  error_count           = %lu\r\n", g_mcu_info_app.stats.error_count);
-    BoardLog_Info("  last_cmd              = 0x%02X\r\n", g_mcu_info_app.stats.last_cmd);
-    BoardLog_Info("  last_event_id         = 0x%02X\r\n", g_mcu_info_app.stats.last_event_id);
-    BoardLog_Info("  last_error            = 0x%02X\r\n", g_mcu_info_app.stats.last_error);
-    BoardLog_Info("  event_available       = %u\r\n", RingBuffer_Available(&g_mcu_info_app.event_rb));
+    BoardLog_Info("  initialized              = %u\r\n", g_mcu_info_app.initialized);
+    BoardLog_Info("  init_count               = %lu\r\n", g_mcu_info_app.stats.init_count);
+    BoardLog_Info("  run_count                = %lu\r\n", g_mcu_info_app.stats.run_count);
+    BoardLog_Info("  register_command_count   = %lu\r\n", g_mcu_info_app.stats.register_command_count);
+    BoardLog_Info("  register_command_fail    = %lu\r\n", g_mcu_info_app.stats.register_command_fail_count);
+    BoardLog_Info("  ping_count               = %lu\r\n", g_mcu_info_app.stats.ping_count);
+    BoardLog_Info("  get_version_count        = %lu\r\n", g_mcu_info_app.stats.get_version_count);
+    BoardLog_Info("  get_status_count         = %lu\r\n", g_mcu_info_app.stats.get_status_count);
+    BoardLog_Info("  get_reset_info_count     = %lu\r\n", g_mcu_info_app.stats.get_reset_info_count);
+    BoardLog_Info("  get_time_info_count      = %lu\r\n", g_mcu_info_app.stats.get_time_info_count);
+    BoardLog_Info("  get_fault_info_count     = %lu\r\n", g_mcu_info_app.stats.get_fault_info_count);
+    BoardLog_Info("  get_uart_stats_count     = %lu\r\n", g_mcu_info_app.stats.get_uart_stats_count);
+    BoardLog_Info("  get_app_stats_count      = %lu\r\n", g_mcu_info_app.stats.get_app_stats_count);
+    BoardLog_Info("  get_event_stats_count    = %lu\r\n", g_mcu_info_app.stats.get_event_stats_count);
+    BoardLog_Info("  post_event_count         = %lu\r\n", g_mcu_info_app.stats.post_event_count);
+    BoardLog_Info("  event_forward_count      = %lu\r\n", g_mcu_info_app.stats.event_forward_count);
+    BoardLog_Info("  event_drop_count         = %lu\r\n", g_mcu_info_app.stats.event_drop_count);
+    BoardLog_Info("  update_snapshot_count    = %lu\r\n", g_mcu_info_app.stats.update_snapshot_count);
+    BoardLog_Info("  get_snapshot_count       = %lu\r\n", g_mcu_info_app.stats.get_snapshot_count);
+    BoardLog_Info("  update_reset_snapshot    = %lu\r\n", g_mcu_info_app.stats.update_reset_snapshot_count);
+    BoardLog_Info("  get_reset_snapshot       = %lu\r\n", g_mcu_info_app.stats.get_reset_snapshot_count);
+    BoardLog_Info("  update_status_count      = %lu\r\n", g_mcu_info_app.stats.update_status_count);
+    BoardLog_Info("  invalid_param_count      = %lu\r\n", g_mcu_info_app.stats.invalid_param_count);
+    BoardLog_Info("  not_found_count          = %lu\r\n", g_mcu_info_app.stats.not_found_count);
+    BoardLog_Info("  error_count              = %lu\r\n", g_mcu_info_app.stats.error_count);
+    BoardLog_Info("  last_cmd                 = 0x%02X\r\n", g_mcu_info_app.stats.last_cmd);
+    BoardLog_Info("  last_snapshot_id         = 0x%02X\r\n", g_mcu_info_app.stats.last_snapshot_id);
+    BoardLog_Info("  last_event_id            = 0x%02X\r\n", g_mcu_info_app.stats.last_event_id);
+    BoardLog_Info("  last_error               = 0x%02X\r\n", g_mcu_info_app.stats.last_error);
+    BoardLog_Info("  reset_snapshot_valid     = %u\r\n", g_mcu_info_app.reset_snapshot_valid);
+    BoardLog_Info("  event_available          = %u\r\n", RingBuffer_Available(&g_mcu_info_app.event_rb));
 
     if (rb_stats != NULL)
     {
-        BoardLog_Info("  event_rb_write_bytes  = %lu\r\n", rb_stats->write_bytes);
-        BoardLog_Info("  event_rb_read_bytes   = %lu\r\n", rb_stats->read_bytes);
-        BoardLog_Info("  event_rb_overflow     = %lu\r\n", rb_stats->overflow_count);
-        BoardLog_Info("  event_rb_high         = %u\r\n", rb_stats->high_watermark);
+        BoardLog_Info("  event_rb_write_bytes     = %lu\r\n", rb_stats->write_bytes);
+        BoardLog_Info("  event_rb_read_bytes      = %lu\r\n", rb_stats->read_bytes);
+        BoardLog_Info("  event_rb_overflow        = %lu\r\n", rb_stats->overflow_count);
+        BoardLog_Info("  event_rb_high            = %u\r\n", rb_stats->high_watermark);
     }
 }
 
-static void McuInfoApp_SetResp(McuInfoAppResponse_t *resp,
-                               uint8_t cmd,
-                               const uint8_t *payload,
-                               uint16_t payload_len)
+static int McuInfoApp_RegisterBuiltinCommands(void)
 {
-    uint16_t copy_len;
+    int ret = MCU_INFO_APP_OK;
 
-    if (resp == NULL)
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_PING,
+                                   McuInfoApp_HandlePing,
+                                   NULL,
+                                   "PING",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
     {
-        return;
+        ret = MCU_INFO_APP_ERROR;
     }
 
-    memset(resp, 0, sizeof(*resp));
-
-    resp->frame_type = PROTO_FRAME_TYPE_RESP;
-    resp->cmd = cmd;
-    resp->error_code = PROTO_ERROR_OK;
-
-    if ((payload != NULL) && (payload_len > 0U))
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_VERSION,
+                                   McuInfoApp_HandleGetVersion,
+                                   NULL,
+                                   "GET_VERSION",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
     {
-        copy_len = payload_len;
-
-        if (copy_len > PROTO_FRAME_MAX_PAYLOAD_SIZE)
-        {
-            copy_len = PROTO_FRAME_MAX_PAYLOAD_SIZE;
-        }
-
-        memcpy(resp->payload, payload, copy_len);
-        resp->payload_len = copy_len;
+        ret = MCU_INFO_APP_ERROR;
     }
+
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_STATUS,
+                                   McuInfoApp_HandleGetStatus,
+                                   NULL,
+                                   "GET_STATUS",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
+    {
+        ret = MCU_INFO_APP_ERROR;
+    }
+
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_RESET_INFO,
+                                   McuInfoApp_HandleGetResetInfo,
+                                   NULL,
+                                   "GET_RESET_INFO",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
+    {
+        ret = MCU_INFO_APP_ERROR;
+    }
+
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_TIME_INFO,
+                                   McuInfoApp_HandleGetTimeInfo,
+                                   NULL,
+                                   "GET_TIME_INFO",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
+    {
+        ret = MCU_INFO_APP_ERROR;
+    }
+
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_FAULT_INFO,
+                                   McuInfoApp_HandleGetFaultInfo,
+                                   NULL,
+                                   "GET_FAULT_INFO",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
+    {
+        ret = MCU_INFO_APP_ERROR;
+    }
+
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_UART_STATS,
+                                   McuInfoApp_HandleGetUartStats,
+                                   NULL,
+                                   "GET_UART_STATS",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
+    {
+        ret = MCU_INFO_APP_ERROR;
+    }
+
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_APP_STATS,
+                                   McuInfoApp_HandleGetAppStats,
+                                   NULL,
+                                   "GET_APP_STATS",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
+    {
+        ret = MCU_INFO_APP_ERROR;
+    }
+
+    if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_EVENT_STATS,
+                                   McuInfoApp_HandleGetEventStats,
+                                   NULL,
+                                   "GET_EVENT_STATS",
+                                   CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
+    {
+        ret = MCU_INFO_APP_ERROR;
+    }
+		
+		if (McuInfoApp_RegisterCommand(MCU_INFO_CMD_GET_COMMAND_STATS,
+																			 McuInfoApp_HandleGetCommandStats,
+																			 NULL,
+																			 "GET_EVENT_STATS",
+																			 CMD_FLAG_READ_ONLY) != MCU_INFO_APP_OK)
+				{
+						ret = MCU_INFO_APP_ERROR;
+				}
+    return ret;
 }
 
-static void McuInfoApp_SetNack(McuInfoAppResponse_t *resp,
-                               uint8_t cmd,
-                               uint8_t error_code)
-{
-    if (resp == NULL)
-    {
-        return;
-    }
-
-    memset(resp, 0, sizeof(*resp));
-
-    resp->frame_type = PROTO_FRAME_TYPE_NACK;
-    resp->cmd = cmd;
-    resp->error_code = error_code;
-
-    resp->payload[0] = error_code;
-    resp->payload[1] = cmd;
-    resp->payload_len = 2U;
-}
-
-static void McuInfoApp_HandlePing(const ProtocolFrame_t *req_frame,
-                                  McuInfoAppResponse_t *resp)
+static int McuInfoApp_HandlePing(const ProtocolFrame_t *req_frame,
+                                 CommandManagerResponse_t *resp,
+                                 void *ctx)
 {
     static const uint8_t pong_payload[] = { 'P', 'O', 'N', 'G' };
 
+    (void)ctx;
+
     if ((req_frame == NULL) || (resp == NULL))
     {
-        return;
+        return COMMAND_SERVICE_INVALID_PARAM;
     }
 
     g_mcu_info_app.stats.ping_count++;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
 
-    McuInfoApp_SetResp(resp,
-                       req_frame->cmd,
-                       pong_payload,
-                       (uint16_t)sizeof(pong_payload));
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           pong_payload,
+                           (uint16_t)sizeof(pong_payload));
+
+    return COMMAND_SERVICE_OK;
 }
 
-static void McuInfoApp_HandleGetVersion(const ProtocolFrame_t *req_frame,
-                                        McuInfoAppResponse_t *resp)
+static int McuInfoApp_HandleGetVersion(const ProtocolFrame_t *req_frame,
+                                       CommandManagerResponse_t *resp,
+                                       void *ctx)
 {
     const char *version = MCU_INFO_APP_VERSION_STRING;
 
+    (void)ctx;
+
     if ((req_frame == NULL) || (resp == NULL))
     {
-        return;
+        return COMMAND_SERVICE_INVALID_PARAM;
     }
 
     g_mcu_info_app.stats.get_version_count++;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
 
-    McuInfoApp_SetResp(resp,
-                       req_frame->cmd,
-                       (const uint8_t *)version,
-                       (uint16_t)strlen(version));
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           (const uint8_t *)version,
+                           (uint16_t)strlen(version));
+
+    return COMMAND_SERVICE_OK;
 }
 
-static void McuInfoApp_HandleGetStatus(const ProtocolFrame_t *req_frame,
-                                       McuInfoAppResponse_t *resp)
+static int McuInfoApp_HandleGetStatus(const ProtocolFrame_t *req_frame,
+                                      CommandManagerResponse_t *resp,
+                                      void *ctx)
 {
     const char *status = MCU_INFO_APP_STATUS_STRING;
 
+    (void)ctx;
+
     if ((req_frame == NULL) || (resp == NULL))
     {
-        return;
+        return COMMAND_SERVICE_INVALID_PARAM;
     }
 
     g_mcu_info_app.stats.get_status_count++;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
 
-    McuInfoApp_SetResp(resp,
-                       req_frame->cmd,
-                       (const uint8_t *)status,
-                       (uint16_t)strlen(status));
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           (const uint8_t *)status,
+                           (uint16_t)strlen(status));
+
+    return COMMAND_SERVICE_OK;
 }
 
-static void McuInfoApp_HandleGetResetInfo(const ProtocolFrame_t *req_frame,
-                                          McuInfoAppResponse_t *resp)
+static int McuInfoApp_HandleGetResetInfo(const ProtocolFrame_t *req_frame,
+                                         CommandManagerResponse_t *resp,
+                                         void *ctx)
 {
-    /*
-     * TODO:
-     * Reset info should be posted as snapshot at boot stage.
-     */
+    PlatformResetInfo_t reset_info;
+    char text_buf[128];
+
+    (void)ctx;
+
     if ((req_frame == NULL) || (resp == NULL))
     {
-        return;
+        return COMMAND_SERVICE_INVALID_PARAM;
     }
 
     g_mcu_info_app.stats.get_reset_info_count++;
-    g_mcu_info_app.stats.last_error = PROTO_ERROR_UNKNOWN_CMD;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
 
-    McuInfoApp_SetNack(resp,
-                       req_frame->cmd,
-                       PROTO_ERROR_UNKNOWN_CMD);
+    if (McuInfoApp_GetResetSnapshot(&reset_info) != MCU_INFO_APP_OK)
+    {
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_INVALID_STATE;
+
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INVALID_STATE);
+
+        return COMMAND_SERVICE_ERROR;
+    }
+
+    McuInfoApp_BuildResetInfoPayload(text_buf,
+                                     (uint16_t)sizeof(text_buf),
+                                     &reset_info);
+
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           (const uint8_t *)text_buf,
+                           (uint16_t)strlen(text_buf));
+
+    return COMMAND_SERVICE_OK;
 }
 
-static void McuInfoApp_HandleGetTimeInfo(const ProtocolFrame_t *req_frame,
-                                         McuInfoAppResponse_t *resp)
+static int McuInfoApp_HandleGetTimeInfo(const ProtocolFrame_t *req_frame,
+                                        CommandManagerResponse_t *resp,
+                                        void *ctx)
 {
     char text_buf[32];
     uint32_t tick;
     int len;
 
+    (void)ctx;
+
     if ((req_frame == NULL) || (resp == NULL))
     {
-        return;
+        return COMMAND_SERVICE_INVALID_PARAM;
     }
 
     g_mcu_info_app.stats.get_time_info_count++;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
 
     tick = PlatformTime_GetMs();
 
@@ -550,10 +731,11 @@ static void McuInfoApp_HandleGetTimeInfo(const ProtocolFrame_t *req_frame,
         g_mcu_info_app.stats.error_count++;
         g_mcu_info_app.stats.last_error = PROTO_ERROR_INTERNAL_ERROR;
 
-        McuInfoApp_SetNack(resp,
-                           req_frame->cmd,
-                           PROTO_ERROR_INTERNAL_ERROR);
-        return;
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INTERNAL_ERROR);
+
+        return COMMAND_SERVICE_ERROR;
     }
 
     if (len >= (int)sizeof(text_buf))
@@ -562,45 +744,58 @@ static void McuInfoApp_HandleGetTimeInfo(const ProtocolFrame_t *req_frame,
         text_buf[len] = '\0';
     }
 
-    McuInfoApp_SetResp(resp,
-                       req_frame->cmd,
-                       (const uint8_t *)text_buf,
-                       (uint16_t)len);
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           (const uint8_t *)text_buf,
+                           (uint16_t)len);
+
+    return COMMAND_SERVICE_OK;
 }
 
-static void McuInfoApp_HandleGetFaultInfo(const ProtocolFrame_t *req_frame,
-                                          McuInfoAppResponse_t *resp)
+static int McuInfoApp_HandleGetFaultInfo(const ProtocolFrame_t *req_frame,
+                                         CommandManagerResponse_t *resp,
+                                         void *ctx)
 {
-    /*
-     * TODO:
-     * Fault info should be posted as snapshot/event by fault module.
-     */
+    (void)ctx;
+
     if ((req_frame == NULL) || (resp == NULL))
     {
-        return;
+        return COMMAND_SERVICE_INVALID_PARAM;
     }
 
     g_mcu_info_app.stats.get_fault_info_count++;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
     g_mcu_info_app.stats.last_error = PROTO_ERROR_UNKNOWN_CMD;
 
-    McuInfoApp_SetNack(resp,
-                       req_frame->cmd,
-                       PROTO_ERROR_UNKNOWN_CMD);
+    /*
+     * Fault snapshot/event will be connected in the next step.
+     */
+    CommandService_SetNack(resp,
+                           req_frame->cmd,
+                           PROTO_ERROR_UNKNOWN_CMD);
+
+    return COMMAND_SERVICE_UNKNOWN_CMD;
 }
 
-static void McuInfoApp_HandleGetUartStats(const ProtocolFrame_t *req_frame,
-                                          McuInfoAppResponse_t *resp)
+static int McuInfoApp_HandleGetUartStats(const ProtocolFrame_t *req_frame,
+                                         CommandManagerResponse_t *resp,
+                                         void *ctx)
 {
     char text_buf[96];
     PlatformUartRxSnapshot_t snapshot;
     int len;
 
+    (void)ctx;
+
     if ((req_frame == NULL) || (resp == NULL))
     {
-        return;
+        return COMMAND_SERVICE_INVALID_PARAM;
     }
 
     g_mcu_info_app.stats.get_uart_stats_count++;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
 
     PlatformUart_GetRxSnapshot(&snapshot);
 
@@ -617,10 +812,11 @@ static void McuInfoApp_HandleGetUartStats(const ProtocolFrame_t *req_frame,
         g_mcu_info_app.stats.error_count++;
         g_mcu_info_app.stats.last_error = PROTO_ERROR_INTERNAL_ERROR;
 
-        McuInfoApp_SetNack(resp,
-                           req_frame->cmd,
-                           PROTO_ERROR_INTERNAL_ERROR);
-        return;
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INTERNAL_ERROR);
+
+        return COMMAND_SERVICE_ERROR;
     }
 
     if (len >= (int)sizeof(text_buf))
@@ -629,42 +825,66 @@ static void McuInfoApp_HandleGetUartStats(const ProtocolFrame_t *req_frame,
         text_buf[len] = '\0';
     }
 
-    McuInfoApp_SetResp(resp,
-                       req_frame->cmd,
-                       (const uint8_t *)text_buf,
-                       (uint16_t)len);
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           (const uint8_t *)text_buf,
+                           (uint16_t)len);
+
+    return COMMAND_SERVICE_OK;
 }
 
-static void McuInfoApp_HandleGetAppStats(const ProtocolFrame_t *req_frame,
-                                         McuInfoAppResponse_t *resp)
+static int McuInfoApp_HandleGetAppStats(const ProtocolFrame_t *req_frame,
+                                        CommandManagerResponse_t *resp,
+                                        void *ctx)
 {
     char text_buf[96];
+    const McuInfoAppStats_t *stats;
     int len;
+
+    (void)ctx;
 
     if ((req_frame == NULL) || (resp == NULL))
     {
-        return;
+        return COMMAND_SERVICE_INVALID_PARAM;
     }
 
     g_mcu_info_app.stats.get_app_stats_count++;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
+
+    stats = McuInfoApp_GetStats();
+
+    if (stats == NULL)
+    {
+        g_mcu_info_app.stats.error_count++;
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_INTERNAL_ERROR;
+
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INTERNAL_ERROR);
+
+        return COMMAND_SERVICE_ERROR;
+    }
 
     len = snprintf(text_buf,
                    sizeof(text_buf),
                    "run=%lu,post=%lu,fwd=%lu,drop=%lu",
-                   (unsigned long)g_mcu_info_app.stats.run_count,
-                   (unsigned long)g_mcu_info_app.stats.post_event_count,
-                   (unsigned long)g_mcu_info_app.stats.event_forward_count,
-                   (unsigned long)g_mcu_info_app.stats.event_drop_count);
+                   (unsigned long)stats->run_count,
+                   (unsigned long)stats->post_event_count,
+                   (unsigned long)stats->event_forward_count,
+                   (unsigned long)stats->event_drop_count);
 
     if (len < 0)
     {
         g_mcu_info_app.stats.error_count++;
         g_mcu_info_app.stats.last_error = PROTO_ERROR_INTERNAL_ERROR;
 
-        McuInfoApp_SetNack(resp,
-                           req_frame->cmd,
-                           PROTO_ERROR_INTERNAL_ERROR);
-        return;
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INTERNAL_ERROR);
+
+        return COMMAND_SERVICE_ERROR;
     }
 
     if (len >= (int)sizeof(text_buf))
@@ -673,10 +893,212 @@ static void McuInfoApp_HandleGetAppStats(const ProtocolFrame_t *req_frame,
         text_buf[len] = '\0';
     }
 
-    McuInfoApp_SetResp(resp,
-                       req_frame->cmd,
-                       (const uint8_t *)text_buf,
-                       (uint16_t)len);
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           (const uint8_t *)text_buf,
+                           (uint16_t)len);
+
+    return COMMAND_SERVICE_OK;
+}
+
+static int McuInfoApp_HandleGetEventStats(const ProtocolFrame_t *req_frame,
+                                          CommandManagerResponse_t *resp,
+                                          void *ctx)
+{
+    char text_buf[96];
+    const McuInfoAppStats_t *stats;
+    int len;
+
+    (void)ctx;
+
+    if ((req_frame == NULL) || (resp == NULL))
+    {
+        return COMMAND_SERVICE_INVALID_PARAM;
+    }
+
+    g_mcu_info_app.stats.get_event_stats_count++;
+    g_mcu_info_app.stats.last_cmd = req_frame->cmd;
+
+    stats = McuInfoApp_GetStats();
+
+    if (stats == NULL)
+    {
+        g_mcu_info_app.stats.error_count++;
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_INTERNAL_ERROR;
+
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INTERNAL_ERROR);
+
+        return COMMAND_SERVICE_ERROR;
+    }
+
+    len = snprintf(text_buf,
+                   sizeof(text_buf),
+                   "post=%lu,fwd=%lu,drop=%lu,last=0x%02X",
+                   (unsigned long)stats->post_event_count,
+                   (unsigned long)stats->event_forward_count,
+                   (unsigned long)stats->event_drop_count,
+                   stats->last_event_id);
+
+    if (len < 0)
+    {
+        g_mcu_info_app.stats.error_count++;
+        g_mcu_info_app.stats.last_error = PROTO_ERROR_INTERNAL_ERROR;
+
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INTERNAL_ERROR);
+
+        return COMMAND_SERVICE_ERROR;
+    }
+
+    if (len >= (int)sizeof(text_buf))
+    {
+        len = (int)(sizeof(text_buf) - 1);
+        text_buf[len] = '\0';
+    }
+
+    g_mcu_info_app.stats.last_error = PROTO_ERROR_OK;
+
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           (const uint8_t *)text_buf,
+                           (uint16_t)len);
+
+    return COMMAND_SERVICE_OK;
+}
+
+static int McuInfoApp_HandleGetCommandStats(const ProtocolFrame_t *req_frame,
+                                            CommandManagerResponse_t *resp,
+                                            void *ctx)
+{
+    const CommandServiceStats_t *stats;
+    char text_buf[96];
+    int len;
+
+    (void)ctx;
+
+    if ((req_frame == NULL) || (resp == NULL))
+    {
+        return COMMAND_SERVICE_INVALID_PARAM;
+    }
+
+    stats = CommandService_GetStats();
+
+    if (stats == NULL)
+    {
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INTERNAL_ERROR);
+
+        return COMMAND_SERVICE_ERROR;
+    }
+
+    memset(text_buf, 0, sizeof(text_buf));
+
+    len = snprintf(text_buf,
+                   sizeof(text_buf),
+                   "init=%lu,reg=%u,disp=%lu,unk=%lu,err=%lu,last=0x%02X",
+                   (unsigned long)stats->init_count,
+                   (unsigned int)stats->registered_count,
+                   (unsigned long)stats->dispatch_count,
+                   (unsigned long)stats->unknown_cmd_count,
+                   (unsigned long)stats->handler_error_count,
+                   stats->last_cmd);
+
+    if (len < 0)
+    {
+        CommandService_SetNack(resp,
+                               req_frame->cmd,
+                               PROTO_ERROR_INTERNAL_ERROR);
+
+        return COMMAND_SERVICE_ERROR;
+    }
+
+    if (len >= (int)sizeof(text_buf))
+    {
+        len = (int)(sizeof(text_buf) - 1);
+        text_buf[len] = '\0';
+    }
+
+    CommandService_SetResp(resp,
+                           req_frame->cmd,
+                           (const uint8_t *)text_buf,
+                           (uint16_t)len);
+
+    return COMMAND_SERVICE_OK;
+}
+static const char *McuInfoApp_ResetCauseToShortString(PlatformResetCause_t cause)
+{
+    switch (cause)
+    {
+        case PLATFORM_RESET_CAUSE_PIN:
+            return "PIN";
+
+        case PLATFORM_RESET_CAUSE_POR:
+            return "POR";
+
+        case PLATFORM_RESET_CAUSE_BOR:
+            return "BOR";
+
+        case PLATFORM_RESET_CAUSE_SOFTWARE:
+            return "SOFTWARE";
+
+        case PLATFORM_RESET_CAUSE_IWDG:
+            return "IWDG";
+
+        case PLATFORM_RESET_CAUSE_WWDG:
+            return "WWDG";
+
+        case PLATFORM_RESET_CAUSE_UNKNOWN:
+        default:
+            return "UNKNOWN";
+    }
+}
+
+static void McuInfoApp_BuildResetInfoPayload(char *buf,
+                                             uint16_t buf_size,
+                                             const PlatformResetInfo_t *info)
+{
+    int len;
+
+    if ((buf == NULL) || (buf_size == 0U))
+    {
+        return;
+    }
+
+    buf[0] = '\0';
+
+    if (info == NULL)
+    {
+        (void)snprintf(buf, buf_size, "cause=UNKNOWN,valid=0");
+        return;
+    }
+
+    len = snprintf(buf,
+                   buf_size,
+                   "cause=%s,pin=%u,por=%u,bor=%u,sw=%u,iwdg=%u,wwdg=%u",
+                   McuInfoApp_ResetCauseToShortString(info->primary_cause),
+                   info->pin_reset,
+                   info->por_reset,
+                   info->bor_reset,
+                   info->software_reset,
+                   info->iwdg_reset,
+                   info->wwdg_reset);
+
+    if (len < 0)
+    {
+        buf[0] = '\0';
+        return;
+    }
+
+    if (len >= (int)buf_size)
+    {
+        buf[buf_size - 1U] = '\0';
+    }
 }
 
 static int McuInfoApp_PopEvent(McuInfoEventRecord_t *event)
@@ -733,16 +1155,6 @@ static void McuInfoApp_RunEventForwarder(void)
         return;
     }
 
-    /*
-     * Event payload format sent to CommandManager:
-     *   [0] app_id
-     *   [1] original_event_id
-     *   [2] tick LSB
-     *   [3] tick
-     *   [4] tick
-     *   [5] tick MSB
-     *   [6..] original payload
-     */
     event_payload[0] = event.app_id;
     event_payload[1] = event.event_id;
     event_payload[2] = (uint8_t)(event.tick_ms & 0xFFU);

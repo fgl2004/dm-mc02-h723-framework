@@ -8,10 +8,13 @@ extern "C" {
 #include <stdint.h>
 
 #include "protocol_frame.h"
+#include "platform_reset.h"
+#include "command_service.h"
 
 #define MCU_INFO_APP_MAX_EVENT_PAYLOAD_SIZE      64U
 #define MCU_INFO_APP_EVENT_QUEUE_SIZE            8U
 #define MCU_INFO_APP_MAX_SNAPSHOT_PAYLOAD_SIZE   64U
+#define MCU_INFO_APP_SNAPSHOT_SLOT_COUNT         8U
 
 typedef enum
 {
@@ -19,19 +22,26 @@ typedef enum
     MCU_INFO_APP_ERROR = -1,
     MCU_INFO_APP_INVALID_PARAM = -2,
     MCU_INFO_APP_UNKNOWN_CMD = -3,
-    MCU_INFO_APP_QUEUE_FULL = -4
+    MCU_INFO_APP_QUEUE_FULL = -4,
+    MCU_INFO_APP_NOT_FOUND = -5
 } McuInfoAppResult_t;
 
+/*
+ * Current Stage 2 basic commands.
+ * These values are kept compatible with the current PC python tools.
+ */
 typedef enum
 {
-    MCU_INFO_CMD_PING           = 0x01U,
-    MCU_INFO_CMD_GET_VERSION    = 0x02U,
-    MCU_INFO_CMD_GET_STATUS     = 0x03U,
-    MCU_INFO_CMD_GET_RESET_INFO = 0x04U,
-    MCU_INFO_CMD_GET_TIME_INFO  = 0x05U,
-    MCU_INFO_CMD_GET_FAULT_INFO = 0x06U,
-    MCU_INFO_CMD_GET_UART_STATS = 0x07U,
-    MCU_INFO_CMD_GET_APP_STATS  = 0x08U
+    MCU_INFO_CMD_PING           = SYS_CMD_PING,
+    MCU_INFO_CMD_GET_VERSION    = SYS_CMD_GET_VERSION,
+    MCU_INFO_CMD_GET_STATUS     = SYS_CMD_GET_STATUS,
+    MCU_INFO_CMD_GET_RESET_INFO = SYS_CMD_GET_RESET_INFO,
+    MCU_INFO_CMD_GET_TIME_INFO  = SYS_CMD_GET_TIME_INFO,
+    MCU_INFO_CMD_GET_FAULT_INFO = SYS_CMD_GET_FAULT_INFO,
+    MCU_INFO_CMD_GET_UART_STATS = SYS_CMD_GET_UART_STATS,
+    MCU_INFO_CMD_GET_APP_STATS  = SYS_CMD_GET_APP_STATS,
+    MCU_INFO_CMD_GET_EVENT_STATS = SYS_CMD_GET_EVENT_STATS,
+	  MCU_INFO_CMD_GET_COMMAND_STATS    =   CMD_GET_COMMAND_STATS
 } McuInfoCommandId_t;
 
 typedef enum
@@ -49,18 +59,20 @@ typedef enum
     MCU_INFO_APP_ID_SYSTEM = 0U,
     MCU_INFO_APP_ID_UART   = 1U,
     MCU_INFO_APP_ID_FAULT  = 2U,
-    MCU_INFO_APP_ID_USER   = 3U
+    MCU_INFO_APP_ID_USER   = 3U,
+    MCU_INFO_APP_ID_RESET  = 4U
 } McuInfoAppId_t;
 
-typedef struct
+typedef enum
 {
-    uint8_t frame_type;
-    uint8_t cmd;
-    uint8_t error_code;
-
-    uint16_t payload_len;
-    uint8_t payload[PROTO_FRAME_MAX_PAYLOAD_SIZE];
-} McuInfoAppResponse_t;
+    MCU_INFO_SNAPSHOT_SYSTEM_STATUS = 0x01U,
+    MCU_INFO_SNAPSHOT_RESET_INFO    = 0x02U,
+    MCU_INFO_SNAPSHOT_FAULT_INFO    = 0x03U,
+    MCU_INFO_SNAPSHOT_UART_STATS    = 0x04U,
+    MCU_INFO_SNAPSHOT_APP_STATS     = 0x05U,
+    MCU_INFO_SNAPSHOT_CLOCK_INFO    = 0x06U,
+    MCU_INFO_SNAPSHOT_BUILD_INFO    = 0x07U
+} McuInfoSnapshotId_t;
 
 typedef struct
 {
@@ -83,7 +95,9 @@ typedef struct
 {
     uint32_t init_count;
     uint32_t run_count;
-    uint32_t dispatch_count;
+
+    uint32_t register_command_count;
+    uint32_t register_command_fail_count;
 
     uint32_t ping_count;
     uint32_t get_version_count;
@@ -93,18 +107,24 @@ typedef struct
     uint32_t get_fault_info_count;
     uint32_t get_uart_stats_count;
     uint32_t get_app_stats_count;
+    uint32_t get_event_stats_count;
 
     uint32_t post_event_count;
     uint32_t event_forward_count;
     uint32_t event_drop_count;
+
     uint32_t update_snapshot_count;
+    uint32_t get_snapshot_count;
+    uint32_t update_reset_snapshot_count;
+    uint32_t get_reset_snapshot_count;
     uint32_t update_status_count;
 
-    uint32_t unknown_cmd_count;
     uint32_t invalid_param_count;
+    uint32_t not_found_count;
     uint32_t error_count;
 
     uint8_t last_cmd;
+    uint8_t last_snapshot_id;
     uint8_t last_event_id;
     uint8_t last_error;
 } McuInfoAppStats_t;
@@ -112,17 +132,28 @@ typedef struct
 void McuInfoApp_Init(void);
 void McuInfoApp_Run(void);
 
-int McuInfoApp_HandleCommand(const ProtocolFrame_t *req_frame,
-                             McuInfoAppResponse_t *resp);
+int McuInfoApp_RegisterCommand(uint8_t cmd,
+                               CommandServiceHandler_t handler,
+                               void *ctx,
+                               const char *name,
+                               uint32_t flags);
 
 int McuInfoApp_PostEvent(uint8_t app_id,
                          uint8_t event_id,
                          const uint8_t *payload,
                          uint16_t payload_len);
 
-int McuInfoApp_UpdateSnapshot(uint8_t app_id,
+int McuInfoApp_UpdateSnapshot(uint8_t snapshot_id,
                               const uint8_t *snapshot_data,
                               uint16_t snapshot_len);
+
+int McuInfoApp_GetSnapshot(uint8_t snapshot_id,
+                           uint8_t *out_buf,
+                           uint16_t out_buf_size,
+                           uint16_t *out_len);
+
+int McuInfoApp_UpdateResetSnapshot(const PlatformResetInfo_t *reset_info);
+int McuInfoApp_GetResetSnapshot(PlatformResetInfo_t *reset_info);
 
 int McuInfoApp_UpdateRuntimeStatus(uint8_t app_id,
                                    uint8_t status,

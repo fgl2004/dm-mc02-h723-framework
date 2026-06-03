@@ -44,7 +44,7 @@ typedef struct
     uint32_t init_count;
     uint32_t dispatch_count;
 
-    uint32_t routed_to_mcu_info_app_count;
+    uint32_t routed_to_command_service_count;
 
     uint32_t post_event_count;
     uint32_t event_pop_count;

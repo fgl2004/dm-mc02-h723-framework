@@ -24,6 +24,12 @@ from h7_proto.frame import ProtoFrame, frame_summary
 from h7_proto.serial_session import H7SerialSession
 
 
+# New command after CommandService refactor.
+# Keep it local here so this test can run even if h7_proto.constants.py
+# has not been updated yet.
+MCU_INFO_CMD_GET_COMMAND_STATS = 0x0D
+
+
 @dataclass
 class TestResult:
     name: str
@@ -48,6 +54,7 @@ def expect_resp(
     expected_payload: bytes | None = None,
     expected_ascii_prefix: str | None = None,
     expected_ascii_contains: str | None = None,
+    expected_ascii_all_contains: list[str] | None = None,
 ) -> tuple[bool, str]:
     if frame is None:
         return False, "no response"
@@ -71,6 +78,14 @@ def expect_resp(
 
     if expected_ascii_contains is not None and expected_ascii_contains not in text:
         return False, f"ascii contains mismatch: {frame_summary(frame)}"
+
+    if expected_ascii_all_contains is not None:
+        missing_items = [item for item in expected_ascii_all_contains if item not in text]
+        if missing_items:
+            return (
+                False,
+                f"ascii missing {missing_items}: {frame_summary(frame)}",
+            )
 
     return True, frame_summary(frame)
 
@@ -112,6 +127,7 @@ def run_request_test(
     expected_payload: bytes | None = None,
     expected_ascii_prefix: str | None = None,
     expected_ascii_contains: str | None = None,
+    expected_ascii_all_contains: list[str] | None = None,
     expected_error_code: int | None = None,
 ) -> TestResult:
     seq, tx, frame = client.request(cmd, timeout_s=timeout_s)
@@ -126,6 +142,7 @@ def run_request_test(
             expected_payload=expected_payload,
             expected_ascii_prefix=expected_ascii_prefix,
             expected_ascii_contains=expected_ascii_contains,
+            expected_ascii_all_contains=expected_ascii_all_contains,
         )
     elif expect_kind == "nack":
         ok, detail = expect_nack(
@@ -200,11 +217,19 @@ def run_tests(port: str, baud: int, timeout_s: float) -> int:
             ),
             lambda: run_request_test(
                 client,
-                "command_get_reset_info_currently_nack",
+                "command_get_command_stats",
+                MCU_INFO_CMD_GET_COMMAND_STATS,
+                timeout_s,
+                "resp",
+                expected_ascii_all_contains=["init=", "reg=", "disp="],
+            ),
+            lambda: run_request_test(
+                client,
+                "command_get_reset_info",
                 MCU_INFO_CMD_GET_RESET_INFO,
                 timeout_s,
-                "nack",
-                expected_error_code=PROTO_ERROR_UNKNOWN_CMD,
+                "resp",
+                expected_ascii_contains="cause=",
             ),
             lambda: run_request_test(
                 client,

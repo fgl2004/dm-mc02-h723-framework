@@ -375,6 +375,8 @@ Stage 2: UART Reliable Protocol
 
 ---
 
+
+
 ## 7. Stage 2: UART Reliable Protocol
 
 ### 7.1 Stage Goal
@@ -425,7 +427,7 @@ UART Reliable Protocol 采用分阶段升级路线。
 
 ### 7.3 Current Architecture
 
-当前 Stage 2 协议架构已经调整为：
+当前 Stage 2 协议架构已经调整为 CommandService 注册表架构：
 
 ```text
 PC Tool
@@ -438,9 +440,11 @@ ProtocolManager
   ↓
 CommandManager
   ↓
-McuInfoApp
+CommandService
   ↓
-Other Apps / Platform / Board
+App internal handler
+  ↓
+McuInfoApp / Other Apps / Platform / Board
 ```
 
 核心分层原则：
@@ -449,10 +453,12 @@ Other Apps / Platform / Board
 ProtocolFrame 只负责帧格式、编码、解码、CRC 和 Parser。
 ProtocolFrame 不定义具体业务 CMD。
 ProtocolManager 只负责 UART 字节流接入、协议帧收发和统计。
-CommandManager 只负责命令与事件的语义出口。
-McuInfoApp 是 MCU 与 PC 信息交互中心。
+CommandManager 只负责 REQ / RESP / NACK / EVENT 语义流程。
+CommandService 负责统一命令表、命令注册、命令分发和响应辅助封装。
+McuInfoApp 是 MCU 与 PC 信息交互中心，也是 App handler 与 CommandService 的牵手入口。
+具体命令 handler 集成在各自 App 内部。
 其他 App 不直接调用 CommandManager / ProtocolManager。
-其他 App 若需要与 PC 通信，先通过 McuInfoApp_PostEvent() 或 McuInfoApp_UpdateSnapshot()。
+其他 App 若需要与 PC 通信，先通过 McuInfoApp_RegisterCommand() / McuInfoApp_PostEvent() / McuInfoApp_UpdateSnapshot()。
 ```
 
 主动 EVENT 上报链路：
@@ -477,13 +483,39 @@ EVENT frame
 PC proto_event_listen.py
 ```
 
----
+命令查询链路：
+
+```text
+PC REQ
+  ↓
+ProtocolManager
+  ↓
+CommandManager_Dispatch()
+  ↓
+CommandService_Dispatch()
+  ↓
+cmd table lookup
+  ↓
+App internal handler fills CommandManagerResponse_t
+  ↓
+ProtocolManager sends RESP / NACK
+```
+
+当前通信语义定位：
+
+```text
+CMD       PC -> MCU       请求、配置、控制、查询
+EVENT     MCU -> PC       离散重要事件
+SNAPSHOT  MCU 内部缓存     最近状态，PC 通过 CMD 查询
+STREAM    MCU -> PC       高频实时数据流，后续实现
+BULK      双向/单向        大块可靠传输，后续实现
+```
 
 ### 7.4 Planned Tasks
 
 | 任务                             | 状态      | 说明                                                                        |
 | ------------------------------ | ------- | ------------------------------------------------------------------------- |
-| UART Reliable Protocol Design  | Done    | 已完成并根据 McuInfoApp / CommandManager 架构重修                                   |
+| UART Reliable Protocol Design  | Done    | 已完成并根据 CommandService / McuInfoApp 架构重修                                   |
 | Protocol Frame Format          | Done    | 使用 SOF + VER + TYPE + FLAGS + SEQ + CMD + LEN + PAYLOAD + CRC16           |
 | Protocol Evolution Roadmap     | Done    | 预留 ACK/NACK、重传、小滑动窗口、分片、安全扩展                                              |
 | UART DMA + IDLE 接收             | Done    | USART1 RX DMA circular mode                                               |
@@ -505,8 +537,9 @@ PC proto_event_listen.py
 | Parser Error Recovery          | Done    | 支持半包、粘包、垃圾字节、CRC 错误恢复                                                     |
 | Protocol Frame Self Test       | Done    | `ENABLE_PROTOCOL_FRAME_TEST` 宏控测试 PASS                                    |
 | Protocol Manager               | Done    | 负责 RX 字节处理、Frame Parser、REQ 分发、RESP/NACK/EVENT 发送                         |
-| Command Manager                | Done    | 负责命令路由、EVENT pending queue、统一响应结构                                         |
-| McuInfoApp                     | Done    | MCU 与 PC 信息交互中心 App，支持命令查询、事件收集、事件转发                                      |
+| Command Manager                | Done    | 负责 REQ/RESP/NACK/EVENT 语义流程和 EVENT pending queue                         |
+| CommandService                 | Done    | 统一命令注册表，支持 cmd -> handler 分发、统计和 GET_COMMAND_STATS                         |
+| McuInfoApp                     | Done    | MCU 与 PC 信息交互中心 App，支持命令挂载、事件收集、事件转发、快照缓存                            |
 | McuInfoApp Event Queue         | Done    | 使用 RingBuffer 作为内部事件队列                                                    |
 | CommandManager Event Queue     | Done    | 使用 RingBuffer 作为待发送 EVENT 队列                                              |
 | PING 命令                        | Done    | PC `ping` -> MCU `PONG`                                                   |
@@ -515,12 +548,14 @@ PC proto_event_listen.py
 | GET_TIME_INFO 命令               | Done    | 查询系统 tick                                                                 |
 | GET_UART_STATS 命令              | Done    | 查询 UART RX / RingBuffer 统计                                                |
 | GET_APP_STATS 命令               | Done    | 查询 McuInfoApp 统计                                                          |
-| GET_RESET_INFO 命令              | Planned | 后续通过 McuInfoApp snapshot 接入 Stage 1 reset 信息                              |
+| GET_RESET_INFO 命令              | Done    | 通过 McuInfoApp reset snapshot 返回真实复位信息                                      |
+| GET_COMMAND_STATS 命令           | Done    | 查询 CommandService 初始化、注册、分发、错误统计                                         |
 | GET_FAULT_INFO 命令              | Planned | 后续通过 fault snapshot/event 接入 Fault 信息                                     |
 | Python `proto_ping_test.py`    | Done    | 支持 ping/version/status                                                    |
-| Python `proto_command_test.py` | Done    | 支持 command 扩展测试                                                           |
+| Python `proto_command_test.py` | Done    | 支持 command 扩展测试，已加入 GET_COMMAND_STATS                                      |
 | Python `proto_robust_test.py`  | Done    | 支持半包、粘包、垃圾字节、CRC 错误、未知命令等测试                                               |
 | Python `proto_event_listen.py` | Done    | 支持监听 EVENT 异步事件                                                           |
+| Python `proto_async_mix_test.py` | Done  | 支持命令响应与异步 EVENT 混合场景                                                     |
 | BOOT EVENT                     | Done    | MCU 启动后可主动上报 BOOT 事件                                                      |
 | APP_MESSAGE EVENT              | Done    | 测试事件可通过 McuInfoApp → CommandManager → ProtocolManager 上报到 PC              |
 | 栈空间问题记录                        | Done    | 已记录协议链路引入后栈空间不足导致 tick 异常的问题                                              |
@@ -530,8 +565,6 @@ PC proto_event_listen.py
 | Small Sliding Window           | Planned | V3 用于大数据传输和固件升级                                                           |
 | Fragment Transfer              | Planned | V4 用于固件升级、日志上传、参数导入导出                                                     |
 | Security Extension             | Planned | V5 用于 HMAC、认证、防重放                                                         |
-
----
 
 ### 7.5 Current Module Structure
 
@@ -553,7 +586,9 @@ firmware/app/
 │   ├── protocol_manager.h
 │   ├── protocol_manager.c
 │   ├── command_manager.h
-│   └── command_manager.c
+│   ├── command_manager.c
+│   ├── command_service.h
+│   └── command_service.c
 │
 ├── Apps/
 │   ├── mcu_info_app.h
@@ -610,18 +645,26 @@ pc_tool/h7_uart_ui/
 11. PC 可以发送 GET_TIME_INFO，MCU 返回 tick
 12. PC 可以发送 GET_UART_STATS，MCU 返回 UART 统计
 13. PC 可以发送 GET_APP_STATS，MCU 返回 McuInfoApp 统计
-14. 未知命令返回 NACK UNKNOWN_CMD
-15. CRC 错误帧被拒绝
-16. 半包可以等待后续数据
-17. 粘包可以连续解析
-18. 垃圾字节不会导致 Parser 长期失效
-19. 超长 LEN 被拒绝
-20. BOOT EVENT 可以主动上报到 PC
-21. APP_MESSAGE TEST EVENT 可以主动上报到 PC
-22. 协议重构后 ping/version/status/command/event 测试均通过
+14. PC 可以发送 GET_RESET_INFO，MCU 返回真实 reset snapshot
+15. PC 可以发送 GET_COMMAND_STATS，MCU 返回 CommandService 统计
+16. 未知命令返回 NACK UNKNOWN_CMD
+17. CRC 错误帧被拒绝
+18. 半包可以等待后续数据
+19. 粘包可以连续解析
+20. 垃圾字节不会导致 Parser 长期失效
+21. 超长 LEN 被拒绝
+22. BOOT EVENT 可以主动上报到 PC
+23. APP_MESSAGE TEST EVENT 可以主动上报到 PC
+24. PC 工具可以在异步 EVENT 混入时继续正确等待目标 RESP/NACK
+25. UI Protocol Monitor 可以显示 RESP / NACK / EVENT，并支持 Auto Poll
+26. CommandService 重构后 ping/version/status/time/reset/uart/app/command_stats 测试均通过
 ```
 
----
+`GET_COMMAND_STATS` 典型响应：
+
+```text
+init=1,reg=10,disp=7,unk=0,err=0,last=0x0D
+```
 
 ### 7.7 Known Issues and Records
 
@@ -651,7 +694,7 @@ pc_tool/h7_uart_ui/
 Current status:
 
 ```text
-Stage 2.11: EVENT path validation completed.
+Stage 2.16: CommandService observability completed.
 ```
 
 已完成：
@@ -663,46 +706,71 @@ Generic StateMachine
 ProtocolFrame Parser
 ProtocolManager
 CommandManager
-McuInfoApp
+CommandService registry
+McuInfoApp command mount / event / snapshot
 PC Ping Test
 PC Command Test
 PC Robust Test
 PC Event Listen Test
+PC Async Mix Test
+UI Protocol Monitor
 BOOT EVENT
 APP_MESSAGE EVENT
+GET_RESET_INFO
+GET_COMMAND_STATS
+```
+
+当前架构闭环：
+
+```text
+ProtocolManager
+  ↓
+CommandManager
+  ↓
+CommandService
+  ↓
+App internal handler
+```
+
+当前信息出口闭环：
+
+```text
+CMD       PC -> MCU       Done
+EVENT     MCU -> PC       Done
+SNAPSHOT  MCU cache       Done for reset, extensible
+STREAM    MCU -> PC       Planned
+BULK      transfer        Planned
 ```
 
 下一步建议：
 
 ```text
-Stage 2.12: PC Tool Async Event Compatibility
+Stage 2.17: GET_FAULT_INFO Snapshot + Fault EVENT Integration
 ```
 
 目标：
 
 ```text
-1. 让 proto_command_test.py 在存在异步 EVENT 时仍能等待目标 RESP/NACK
-2. 让 proto_robust_test.py 在存在异步 EVENT 时不误判
-3. PC 侧解析逻辑区分 RESP / NACK / EVENT
-4. 为后续 RTOS 和主动上报常态化打基础
+1. Fault 模块将 fault 信息作为 snapshot/event 接入 McuInfoApp
+2. GET_FAULT_INFO 返回最近 fault 状态
+3. Fault 发生时可通过 EVENT 主动通知 PC
+4. PC command / event / robust / async mix 测试保持通过
 ```
 
 再下一步：
 
 ```text
-Stage 2.13: GET_RESET_INFO / GET_FAULT_INFO Snapshot Integration
+Stage 2.18: Reliability V2 Design
 ```
 
 目标：
 
 ```text
-1. 启动时将 reset info 通过 McuInfoApp_UpdateSnapshot() 写入 McuInfoApp
-2. GET_RESET_INFO 返回真实 reset 信息
-3. Fault 模块将 fault 信息作为 snapshot/event 接入 McuInfoApp
-4. GET_FAULT_INFO 返回最近 fault 状态
+1. ACK / timeout / retry 机制设计
+2. Duplicate request detection
+3. 有副作用命令的幂等策略
+4. 为后续 sliding window 和 bulk transfer 打基础
 ```
-
----
 
 ### 7.9 Stage 2 V1 Acceptance Criteria
 
@@ -717,25 +785,30 @@ Stage 2 V1 当前验收情况：
 6. CRC16 可以识别错误帧 —— Done
 7. PING / GET_VERSION / GET_STATUS 可以正常响应 —— Done
 8. GET_TIME_INFO / GET_UART_STATS / GET_APP_STATS 可以正常响应 —— Done
-9. PC Python Tool 可以发送命令并解析响应 —— Done
-10. 半包场景下 parser 能等待更多数据 —— Done
-11. 粘包场景下 parser 能连续解析多帧 —— Done
-12. 垃圾字节不会导致 parser 长期失效 —— Done
-13. 超长帧不会导致 buffer 越界 —— Done
-14. 通信错误有计数器 —— Done
-15. McuInfoApp 可以主动上报 BOOT EVENT —— Done
-16. McuInfoApp 可以主动上报 APP_MESSAGE EVENT —— Done
-17. CommandManager 可以缓存待发送 EVENT —— Done
-18. ProtocolManager 可以发送 EVENT frame —— Done
+9. GET_RESET_INFO 可以返回真实 reset snapshot —— Done
+10. GET_COMMAND_STATS 可以返回 CommandService 统计 —— Done
+11. PC Python Tool 可以发送命令并解析响应 —— Done
+12. 半包场景下 parser 能等待更多数据 —— Done
+13. 粘包场景下 parser 能连续解析多帧 —— Done
+14. 垃圾字节不会导致 parser 长期失效 —— Done
+15. 超长帧不会导致 buffer 越界 —— Done
+16. 通信错误有计数器 —— Done
+17. McuInfoApp 可以主动上报 BOOT EVENT —— Done
+18. McuInfoApp 可以主动上报 APP_MESSAGE EVENT —— Done
+19. CommandManager 可以缓存待发送 EVENT —— Done
+20. ProtocolManager 可以发送 EVENT frame —— Done
+21. CommandService 可以统一注册和分发命令 —— Done
+22. App handler 可以通过 McuInfoApp 牵手挂载到 CommandService —— Done
+23. PC 工具兼容异步 EVENT 干扰 —— Done
 ```
 
 Stage 2 V1 剩余增强项：
 
 ```text
-1. PC 工具兼容异步 EVENT 干扰 —— Next
-2. GET_RESET_INFO 接入真实 reset snapshot —— Planned
-3. GET_FAULT_INFO 接入真实 fault snapshot/event —— Planned
-4. 协议栈空间占用优化 —— Planned
+1. GET_FAULT_INFO 接入真实 fault snapshot/event —— Next
+2. 协议栈空间占用优化 —— Planned
+3. CommandService 命令列表查询 —— Planned
+4. UI 增加 GET_COMMAND_STATS 独立按钮 —— Optional
 ```
 
 Stage 2 V2 增强阶段：
@@ -748,8 +821,6 @@ Stage 2 V2 增强阶段：
 5. Small sliding window design is implemented or partially implemented
 6. Protocol stress test can be automated by PC Tool
 ```
-
----
 
 ## 8. Stage 3: Diagnostic Framework
 

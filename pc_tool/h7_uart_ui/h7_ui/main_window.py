@@ -27,18 +27,17 @@ import pyqtgraph as pg
 
 from h7_proto.constants import (
     MCU_INFO_CMD_GET_APP_STATS,
+    MCU_INFO_CMD_GET_RESET_INFO,
     MCU_INFO_CMD_GET_STATUS,
     MCU_INFO_CMD_GET_TIME_INFO,
     MCU_INFO_CMD_GET_UART_STATS,
     MCU_INFO_CMD_GET_VERSION,
     MCU_INFO_CMD_PING,
-    TYPE_NACK,
-    TYPE_RESP,
     event_name,
     error_name,
 )
 from h7_proto.event import decode_mcu_info_event, event_summary
-from h7_proto.frame import ProtoFrame, frame_summary, frame_type_name
+from h7_proto.frame import ProtoFrame
 
 from .patterns import AVAILABLE_PATTERNS, make_pattern
 from .serial_worker import SerialWorker, list_serial_ports
@@ -53,7 +52,7 @@ class MainWindow(QMainWindow):
         print("[DEBUG] MainWindow.__init__()")
 
         self.setWindowTitle("H7 UART DMA RX + Protocol Monitor")
-        self.resize(1480, 920)
+        self.resize(1500, 940)
 
         self.serial_worker = SerialWorker()
 
@@ -131,6 +130,7 @@ class MainWindow(QMainWindow):
         middle_layout = QHBoxLayout()
         middle_layout.addWidget(self._build_visual_group(), stretch=3)
         middle_layout.addWidget(self._build_protocol_group(), stretch=2)
+
         layout.addLayout(middle_layout, stretch=4)
 
         layout.addWidget(self._build_stress_group())
@@ -273,6 +273,7 @@ class MainWindow(QMainWindow):
         self.proto_version_btn = QPushButton("VERSION")
         self.proto_status_btn = QPushButton("STATUS")
         self.proto_time_btn = QPushButton("TIME")
+        self.proto_reset_btn = QPushButton("RESET_INFO")
         self.proto_uart_btn = QPushButton("UART_STATS")
         self.proto_app_btn = QPushButton("APP_STATS")
 
@@ -287,12 +288,14 @@ class MainWindow(QMainWindow):
         cmd_layout.addWidget(self.proto_status_btn, 0, 2)
 
         cmd_layout.addWidget(self.proto_time_btn, 1, 0)
-        cmd_layout.addWidget(self.proto_uart_btn, 1, 1)
-        cmd_layout.addWidget(self.proto_app_btn, 1, 2)
+        cmd_layout.addWidget(self.proto_reset_btn, 1, 1)
+        cmd_layout.addWidget(self.proto_uart_btn, 1, 2)
 
-        cmd_layout.addWidget(self.proto_auto_poll_check, 2, 0)
-        cmd_layout.addWidget(QLabel("Interval:"), 2, 1)
-        cmd_layout.addWidget(self.proto_poll_interval_spin, 2, 2)
+        cmd_layout.addWidget(self.proto_app_btn, 2, 0)
+
+        cmd_layout.addWidget(self.proto_auto_poll_check, 3, 0)
+        cmd_layout.addWidget(QLabel("Interval:"), 3, 1)
+        cmd_layout.addWidget(self.proto_poll_interval_spin, 3, 2)
 
         layout.addWidget(cmd_group)
 
@@ -395,12 +398,27 @@ class MainWindow(QMainWindow):
         self.chunk_spin.valueChanged.connect(self._update_target_rate_label)
         self.interval_spin.valueChanged.connect(self._update_target_rate_label)
 
-        self.proto_ping_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_PING, "PING"))
-        self.proto_version_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_VERSION, "VERSION"))
-        self.proto_status_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_STATUS, "STATUS"))
-        self.proto_time_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_TIME_INFO, "TIME"))
-        self.proto_uart_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_UART_STATS, "UART_STATS"))
-        self.proto_app_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_APP_STATS, "APP_STATS"))
+        self.proto_ping_btn.clicked.connect(
+            lambda: self._send_protocol_command(MCU_INFO_CMD_PING, "PING")
+        )
+        self.proto_version_btn.clicked.connect(
+            lambda: self._send_protocol_command(MCU_INFO_CMD_GET_VERSION, "VERSION")
+        )
+        self.proto_status_btn.clicked.connect(
+            lambda: self._send_protocol_command(MCU_INFO_CMD_GET_STATUS, "STATUS")
+        )
+        self.proto_time_btn.clicked.connect(
+            lambda: self._send_protocol_command(MCU_INFO_CMD_GET_TIME_INFO, "TIME")
+        )
+        self.proto_reset_btn.clicked.connect(
+            lambda: self._send_protocol_command(MCU_INFO_CMD_GET_RESET_INFO, "RESET_INFO")
+        )
+        self.proto_uart_btn.clicked.connect(
+            lambda: self._send_protocol_command(MCU_INFO_CMD_GET_UART_STATS, "UART_STATS")
+        )
+        self.proto_app_btn.clicked.connect(
+            lambda: self._send_protocol_command(MCU_INFO_CMD_GET_APP_STATS, "APP_STATS")
+        )
 
         self.proto_auto_poll_check.stateChanged.connect(self._on_protocol_auto_poll_changed)
         self.proto_poll_interval_spin.valueChanged.connect(self._on_protocol_poll_interval_changed)
@@ -595,6 +613,7 @@ class MainWindow(QMainWindow):
             (MCU_INFO_CMD_GET_APP_STATS, "APP_STATS"),
             (MCU_INFO_CMD_GET_TIME_INFO, "TIME"),
             (MCU_INFO_CMD_GET_STATUS, "STATUS"),
+            (MCU_INFO_CMD_GET_RESET_INFO, "RESET_INFO"),
         ]
 
         cmd, name = poll_items[self.protocol_auto_poll_index % len(poll_items)]

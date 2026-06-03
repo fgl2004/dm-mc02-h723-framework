@@ -41,6 +41,7 @@
 "dm_mc02_h723_app\protocol_frame.o"
 "dm_mc02_h723_app\protocol_manager.o"
 "dm_mc02_h723_app\command_manager.o"
+"dm_mc02_h723_app\command_service.o"
 --library_type=microlib --strict --scatter "dm_mc02_h723_app\dm_mc02_h723_app.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

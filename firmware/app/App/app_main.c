@@ -573,7 +573,11 @@ void App_Init(void)
     App_TestProtocolFrame();
 #endif
 #if ENABLE_PROTOCOL_MANAGER_TEST
+    CommandService_Init();
+
     McuInfoApp_Init();
+    (void)McuInfoApp_UpdateResetSnapshot(&g_reset_info);
+
     CommandManager_Init();
     ProtocolManager_Init();
 #endif
