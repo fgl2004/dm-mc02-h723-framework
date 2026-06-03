@@ -27,6 +27,7 @@ import pyqtgraph as pg
 
 from h7_proto.constants import (
     MCU_INFO_CMD_GET_APP_STATS,
+    MCU_INFO_CMD_GET_COMMAND_STATS,
     MCU_INFO_CMD_GET_RESET_INFO,
     MCU_INFO_CMD_GET_STATUS,
     MCU_INFO_CMD_GET_TIME_INFO,
@@ -276,6 +277,7 @@ class MainWindow(QMainWindow):
         self.proto_reset_btn = QPushButton("RESET_INFO")
         self.proto_uart_btn = QPushButton("UART_STATS")
         self.proto_app_btn = QPushButton("APP_STATS")
+        self.proto_cmd_stats_btn = QPushButton("COMMAND_STATS")
 
         self.proto_auto_poll_check = QCheckBox("Auto Poll")
         self.proto_poll_interval_spin = QSpinBox()
@@ -292,6 +294,7 @@ class MainWindow(QMainWindow):
         cmd_layout.addWidget(self.proto_uart_btn, 1, 2)
 
         cmd_layout.addWidget(self.proto_app_btn, 2, 0)
+        cmd_layout.addWidget(self.proto_cmd_stats_btn, 2, 1)
 
         cmd_layout.addWidget(self.proto_auto_poll_check, 3, 0)
         cmd_layout.addWidget(QLabel("Interval:"), 3, 1)
@@ -418,6 +421,9 @@ class MainWindow(QMainWindow):
         )
         self.proto_app_btn.clicked.connect(
             lambda: self._send_protocol_command(MCU_INFO_CMD_GET_APP_STATS, "APP_STATS")
+        )
+        self.proto_cmd_stats_btn.clicked.connect(
+            lambda: self._send_protocol_command(MCU_INFO_CMD_GET_COMMAND_STATS, "COMMAND_STATS")
         )
 
         self.proto_auto_poll_check.stateChanged.connect(self._on_protocol_auto_poll_changed)
