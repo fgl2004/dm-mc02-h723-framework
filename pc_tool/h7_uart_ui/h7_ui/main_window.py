@@ -19,11 +19,26 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QGroupBox,
     QProgressBar,
-    QFileDialog,
     QMessageBox,
+    QCheckBox,
 )
 
 import pyqtgraph as pg
+
+from h7_proto.constants import (
+    MCU_INFO_CMD_GET_APP_STATS,
+    MCU_INFO_CMD_GET_STATUS,
+    MCU_INFO_CMD_GET_TIME_INFO,
+    MCU_INFO_CMD_GET_UART_STATS,
+    MCU_INFO_CMD_GET_VERSION,
+    MCU_INFO_CMD_PING,
+    TYPE_NACK,
+    TYPE_RESP,
+    event_name,
+    error_name,
+)
+from h7_proto.event import decode_mcu_info_event, event_summary
+from h7_proto.frame import ProtoFrame, frame_summary, frame_type_name
 
 from .patterns import AVAILABLE_PATTERNS, make_pattern
 from .serial_worker import SerialWorker, list_serial_ports
@@ -37,8 +52,8 @@ class MainWindow(QMainWindow):
 
         print("[DEBUG] MainWindow.__init__()")
 
-        self.setWindowTitle("H7 UART DMA RX Tester - Rate Controlled")
-        self.resize(1320, 860)
+        self.setWindowTitle("H7 UART DMA RX + Protocol Monitor")
+        self.resize(1480, 920)
 
         self.serial_worker = SerialWorker()
 
@@ -66,9 +81,22 @@ class MainWindow(QMainWindow):
         self.stress_last_queue_size = 0
         self.stress_chunk = 64
 
+        # Protocol monitor
+        self.protocol_frame_count = 0
+        self.protocol_resp_count = 0
+        self.protocol_nack_count = 0
+        self.protocol_event_count = 0
+        self.protocol_tx_req_count = 0
+        self.protocol_last_seq = 0
+        self.protocol_auto_poll_index = 0
+
+        self.protocol_poll_timer = QTimer(self)
+        self.protocol_poll_timer.timeout.connect(self._protocol_auto_poll_once)
+
         self._build_ui()
         self._connect_signals()
         self._refresh_ports()
+        self._update_target_rate_label()
 
         self._append_log("[UI] MainWindow initialized")
 
@@ -79,6 +107,9 @@ class MainWindow(QMainWindow):
             if self.csv_file is not None:
                 self.csv_file.close()
                 self.csv_file = None
+
+            if self.protocol_poll_timer.isActive():
+                self.protocol_poll_timer.stop()
 
             self._stop_stress_silent()
             self.serial_worker.disconnect_port()
@@ -96,7 +127,12 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._build_connection_group())
         layout.addWidget(self._build_metrics_group())
-        layout.addWidget(self._build_visual_group(), stretch=3)
+
+        middle_layout = QHBoxLayout()
+        middle_layout.addWidget(self._build_visual_group(), stretch=3)
+        middle_layout.addWidget(self._build_protocol_group(), stretch=2)
+        layout.addLayout(middle_layout, stretch=4)
+
         layout.addWidget(self._build_stress_group())
         layout.addWidget(self._build_log_group(), stretch=2)
 
@@ -198,6 +234,84 @@ class MainWindow(QMainWindow):
 
         return group
 
+    def _build_protocol_group(self) -> QGroupBox:
+        group = QGroupBox("Protocol Monitor")
+        layout = QVBoxLayout(group)
+
+        stats_group = QGroupBox("Protocol Stats")
+        stats_layout = QGridLayout(stats_group)
+
+        self.protocol_labels: dict[str, QLabel] = {}
+        names = [
+            "frames",
+            "resp",
+            "nack",
+            "event",
+            "tx_req",
+            "last_seq",
+        ]
+
+        for idx, name in enumerate(names):
+            row = idx // 3
+            col = (idx % 3) * 2
+
+            stats_layout.addWidget(QLabel(name + ":"), row, col)
+
+            value_label = QLabel("0")
+            value_label.setMinimumWidth(70)
+            value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+            stats_layout.addWidget(value_label, row, col + 1)
+            self.protocol_labels[name] = value_label
+
+        layout.addWidget(stats_group)
+
+        cmd_group = QGroupBox("Command")
+        cmd_layout = QGridLayout(cmd_group)
+
+        self.proto_ping_btn = QPushButton("PING")
+        self.proto_version_btn = QPushButton("VERSION")
+        self.proto_status_btn = QPushButton("STATUS")
+        self.proto_time_btn = QPushButton("TIME")
+        self.proto_uart_btn = QPushButton("UART_STATS")
+        self.proto_app_btn = QPushButton("APP_STATS")
+
+        self.proto_auto_poll_check = QCheckBox("Auto Poll")
+        self.proto_poll_interval_spin = QSpinBox()
+        self.proto_poll_interval_spin.setRange(100, 10000)
+        self.proto_poll_interval_spin.setValue(1000)
+        self.proto_poll_interval_spin.setSuffix(" ms")
+
+        cmd_layout.addWidget(self.proto_ping_btn, 0, 0)
+        cmd_layout.addWidget(self.proto_version_btn, 0, 1)
+        cmd_layout.addWidget(self.proto_status_btn, 0, 2)
+
+        cmd_layout.addWidget(self.proto_time_btn, 1, 0)
+        cmd_layout.addWidget(self.proto_uart_btn, 1, 1)
+        cmd_layout.addWidget(self.proto_app_btn, 1, 2)
+
+        cmd_layout.addWidget(self.proto_auto_poll_check, 2, 0)
+        cmd_layout.addWidget(QLabel("Interval:"), 2, 1)
+        cmd_layout.addWidget(self.proto_poll_interval_spin, 2, 2)
+
+        layout.addWidget(cmd_group)
+
+        self.protocol_log_text = QTextEdit()
+        self.protocol_log_text.setReadOnly(True)
+        self.protocol_log_text.setMinimumHeight(170)
+
+        self.event_log_text = QTextEdit()
+        self.event_log_text.setReadOnly(True)
+        self.event_log_text.setMinimumHeight(170)
+
+        layout.addWidget(QLabel("RESP / NACK / TX Log"))
+        layout.addWidget(self.protocol_log_text, stretch=1)
+
+        layout.addWidget(QLabel("EVENT Log"))
+        layout.addWidget(self.event_log_text, stretch=1)
+
+        return group
+
     def _build_stress_group(self) -> QGroupBox:
         group = QGroupBox("Stress Test / TX Rate Control")
         layout = QHBoxLayout(group)
@@ -258,7 +372,7 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_log_group(self) -> QGroupBox:
-        group = QGroupBox("Log")
+        group = QGroupBox("Raw Text Log")
         layout = QVBoxLayout(group)
 
         self.log_text = QTextEdit()
@@ -281,11 +395,25 @@ class MainWindow(QMainWindow):
         self.chunk_spin.valueChanged.connect(self._update_target_rate_label)
         self.interval_spin.valueChanged.connect(self._update_target_rate_label)
 
+        self.proto_ping_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_PING, "PING"))
+        self.proto_version_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_VERSION, "VERSION"))
+        self.proto_status_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_STATUS, "STATUS"))
+        self.proto_time_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_TIME_INFO, "TIME"))
+        self.proto_uart_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_UART_STATS, "UART_STATS"))
+        self.proto_app_btn.clicked.connect(lambda: self._send_protocol_command(MCU_INFO_CMD_GET_APP_STATS, "APP_STATS"))
+
+        self.proto_auto_poll_check.stateChanged.connect(self._on_protocol_auto_poll_changed)
+        self.proto_poll_interval_spin.valueChanged.connect(self._on_protocol_poll_interval_changed)
+
         self.serial_worker.connected.connect(self._on_connected)
         self.serial_worker.disconnected.connect(self._on_disconnected)
         self.serial_worker.error.connect(self._on_error)
         self.serial_worker.raw_line.connect(self._on_raw_line)
         self.serial_worker.uart_stat.connect(self._on_uart_stat)
+        self.serial_worker.protocol_frame.connect(self._on_protocol_frame)
+        self.serial_worker.protocol_event.connect(self._on_protocol_event)
+        self.serial_worker.protocol_response.connect(self._on_protocol_response)
+        self.serial_worker.protocol_nack.connect(self._on_protocol_nack)
         self.serial_worker.tx_bytes_written.connect(self._on_tx_bytes_written)
         self.serial_worker.tx_queue_size_changed.connect(self._on_tx_queue_size_changed)
 
@@ -326,6 +454,10 @@ class MainWindow(QMainWindow):
         self._append_log("[UI] Disconnect button clicked")
         print("[DEBUG] Disconnect button clicked")
 
+        if self.protocol_poll_timer.isActive():
+            self.protocol_poll_timer.stop()
+        self.proto_auto_poll_check.setChecked(False)
+
         self._stop_stress_silent()
 
         self.disconnect_btn.setEnabled(False)
@@ -343,6 +475,11 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Disconnected")
         self.connect_btn.setEnabled(True)
         self.disconnect_btn.setEnabled(False)
+
+        if self.protocol_poll_timer.isActive():
+            self.protocol_poll_timer.stop()
+        self.proto_auto_poll_check.setChecked(False)
+
         self._append_log("[UI] Disconnected")
 
     def _on_error(self, msg: str) -> None:
@@ -353,6 +490,10 @@ class MainWindow(QMainWindow):
         self.disconnect_btn.setEnabled(False)
         self.status_label.setText("Error")
 
+        if self.protocol_poll_timer.isActive():
+            self.protocol_poll_timer.stop()
+        self.proto_auto_poll_check.setChecked(False)
+
         self._stop_stress_silent()
 
     # -------------------------------------------------------------------------
@@ -360,8 +501,6 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------------------
 
     def _on_raw_line(self, line: str) -> None:
-        # 调试 consumer 字段时可以先打开这一行。
-        # 现在为了看新增 consumer 字段，可以先显示 @UARTSTAT。
         self._append_log(line)
 
     def _on_uart_stat(self, stat: UartStat) -> None:
@@ -407,6 +546,105 @@ class MainWindow(QMainWindow):
             self.curve_avail.setData(x, list(self.avail_data))
             self.curve_high.setData(x, list(self.high_data))
             self.curve_rx_rate.setData(x, list(self.rx_rate_data))
+
+    # -------------------------------------------------------------------------
+    # Protocol monitor
+    # -------------------------------------------------------------------------
+
+    def _send_protocol_command(self, cmd: int, name: str) -> None:
+        if not self.serial_worker.is_open():
+            self._append_protocol_log(f"[ERROR] Port is not open, cannot send {name}")
+            return
+
+        try:
+            seq, frame = self.serial_worker.send_request(cmd)
+        except Exception as exc:
+            self._append_protocol_log(f"[ERROR] send {name} failed: {exc}")
+            return
+
+        self.protocol_tx_req_count += 1
+        self.protocol_last_seq = seq
+        self._update_protocol_labels()
+
+        self._append_protocol_log(
+            f"[TX] {name}: seq={seq}, cmd=0x{cmd:02X}, bytes={frame.hex(' ').upper()}"
+        )
+
+    def _on_protocol_auto_poll_changed(self) -> None:
+        if self.proto_auto_poll_check.isChecked():
+            if not self.serial_worker.is_open():
+                self._append_protocol_log("[ERROR] Port is not open, auto poll disabled")
+                self.proto_auto_poll_check.setChecked(False)
+                return
+
+            interval = self.proto_poll_interval_spin.value()
+            self.protocol_poll_timer.start(interval)
+            self._append_protocol_log(f"[UI] Auto poll started, interval={interval} ms")
+        else:
+            if self.protocol_poll_timer.isActive():
+                self.protocol_poll_timer.stop()
+            self._append_protocol_log("[UI] Auto poll stopped")
+
+    def _on_protocol_poll_interval_changed(self) -> None:
+        if self.protocol_poll_timer.isActive():
+            self.protocol_poll_timer.start(self.proto_poll_interval_spin.value())
+
+    def _protocol_auto_poll_once(self) -> None:
+        poll_items = [
+            (MCU_INFO_CMD_GET_UART_STATS, "UART_STATS"),
+            (MCU_INFO_CMD_GET_APP_STATS, "APP_STATS"),
+            (MCU_INFO_CMD_GET_TIME_INFO, "TIME"),
+            (MCU_INFO_CMD_GET_STATUS, "STATUS"),
+        ]
+
+        cmd, name = poll_items[self.protocol_auto_poll_index % len(poll_items)]
+        self.protocol_auto_poll_index += 1
+
+        self._send_protocol_command(cmd, name)
+
+    def _on_protocol_frame(self, frame: ProtoFrame) -> None:
+        self.protocol_frame_count += 1
+        self._update_protocol_labels()
+
+    def _on_protocol_response(self, frame: ProtoFrame) -> None:
+        self.protocol_resp_count += 1
+        self._update_protocol_labels()
+
+        text = frame.payload_ascii()
+        self._append_protocol_log(
+            f"[RESP] seq={frame.seq}, cmd=0x{frame.cmd:02X}, "
+            f"len={len(frame.payload)}, payload=[{text}], raw={frame.payload_hex()}"
+        )
+
+    def _on_protocol_nack(self, frame: ProtoFrame) -> None:
+        self.protocol_nack_count += 1
+        self._update_protocol_labels()
+
+        err_code = frame.payload[0] if len(frame.payload) >= 1 else 0xFF
+
+        self._append_protocol_log(
+            f"[NACK] seq={frame.seq}, cmd=0x{frame.cmd:02X}, "
+            f"err=0x{err_code:02X}({error_name(err_code)}), "
+            f"payload={frame.payload_hex()}"
+        )
+
+    def _on_protocol_event(self, frame: ProtoFrame) -> None:
+        self.protocol_event_count += 1
+        self._update_protocol_labels()
+
+        event = decode_mcu_info_event(frame)
+        self._append_event_log(
+            f"[EVENT] seq={frame.seq}, cmd=0x{frame.cmd:02X}({event_name(frame.cmd)}), "
+            f"{event_summary(event)}"
+        )
+
+    def _update_protocol_labels(self) -> None:
+        self.protocol_labels["frames"].setText(str(self.protocol_frame_count))
+        self.protocol_labels["resp"].setText(str(self.protocol_resp_count))
+        self.protocol_labels["nack"].setText(str(self.protocol_nack_count))
+        self.protocol_labels["event"].setText(str(self.protocol_event_count))
+        self.protocol_labels["tx_req"].setText(str(self.protocol_tx_req_count))
+        self.protocol_labels["last_seq"].setText(str(self.protocol_last_seq))
 
     # -------------------------------------------------------------------------
     # TX / stress
@@ -476,7 +714,6 @@ class MainWindow(QMainWindow):
             self._finish_stress()
             return
 
-        # 先立即投递第一块，避免等 timer。
         self._stress_enqueue_next_chunk()
 
         if self.stress_running:
@@ -566,7 +803,6 @@ class MainWindow(QMainWindow):
             self._finish_stress()
 
     def _on_tx_queue_size_changed(self, size: int) -> None:
-        # 暂时不刷 log，避免大量输出。
         pass
 
     # -------------------------------------------------------------------------
@@ -577,3 +813,13 @@ class MainWindow(QMainWindow):
         print(text)
         self.log_text.append(text)
         self.log_text.moveCursor(QTextCursor.End)
+
+    def _append_protocol_log(self, text: str) -> None:
+        print(text)
+        self.protocol_log_text.append(text)
+        self.protocol_log_text.moveCursor(QTextCursor.End)
+
+    def _append_event_log(self, text: str) -> None:
+        print(text)
+        self.event_log_text.append(text)
+        self.event_log_text.moveCursor(QTextCursor.End)

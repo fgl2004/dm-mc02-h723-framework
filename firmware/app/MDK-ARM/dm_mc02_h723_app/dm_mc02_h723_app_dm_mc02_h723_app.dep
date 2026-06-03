@@ -1154,7 +1154,7 @@ I (..\BSP\board_log.h)(0x6A1D856F)
 I (D:\KEIL\ARM\ARMCLANG\include\stdint.h)(0x5F36D0A8)
 I (D:\KEIL\ARM\ARMCLANG\include\stdio.h)(0x5F36D0B4)
 I (D:\KEIL\ARM\ARMCLANG\include\stdarg.h)(0x5F36D092)
-F (..\App\app_main.c)(0x6A1EE889)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-D__MICROLIB -gdwarf-3 -O1 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -I ../Core/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32H7xx/Include -I ../Drivers/CMSIS/Include -I ../Platform -I ../BSP -I ../App -I ../Middleware -I ../Services-I./RTE/_dm_mc02_h723_app-ID:/KEIL/PACK/ARM/CMSIS/5.7.0/CMSIS/Core/Include-D__UVISION_VERSION="533" -D_RTE_ -DSTM32H723xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32H723xx-o dm_mc02_h723_app/app_main.o -MD)
+F (..\App\app_main.c)(0x6A1FBD05)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-D__MICROLIB -gdwarf-3 -O1 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -I ../Core/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32H7xx/Include -I ../Drivers/CMSIS/Include -I ../Platform -I ../BSP -I ../App -I ../Middleware -I ../Services-I./RTE/_dm_mc02_h723_app-ID:/KEIL/PACK/ARM/CMSIS/5.7.0/CMSIS/Core/Include-D__UVISION_VERSION="533" -D_RTE_ -DSTM32H723xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32H723xx-o dm_mc02_h723_app/app_main.o -MD)
 I (..\App\app_main.h)(0x6A1EE1BE)
 I (..\Platform\platform_time.h)(0x6A1D8579)
 I (D:\KEIL\ARM\ARMCLANG\include\stdint.h)(0x5F36D0A8)
@@ -1166,9 +1166,9 @@ I (..\Middleware\crc16.h)(0x6A1E756C)
 I (..\Middleware\state_machine.h)(0x6A1E7945)
 I (..\App\uart_rx_consumer.h)(0x6A1EA8B1)
 I (..\Middleware\protocol_frame.h)(0x6A1EC39F)
-I (..\Services\command_manager.h)(0x6A1EE1B5)
+I (..\Services\command_manager.h)(0x6A1EEA32)
 I (..\Services\protocol_manager.h)(0x6A1EE1B8)
-I (..\App\mcu_info_app.h)(0x6A1EE1BC)
+I (..\App\mcu_info_app.h)(0x6A1EEA2D)
 I (D:\KEIL\ARM\ARMCLANG\include\stdio.h)(0x5F36D0B4)
 F (..\App\uart_rx_consumer.c)(0x6A1EA54D)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-D__MICROLIB -gdwarf-3 -O1 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -I ../Core/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32H7xx/Include -I ../Drivers/CMSIS/Include -I ../Platform -I ../BSP -I ../App -I ../Middleware -I ../Services-I./RTE/_dm_mc02_h723_app-ID:/KEIL/PACK/ARM/CMSIS/5.7.0/CMSIS/Core/Include-D__UVISION_VERSION="533" -D_RTE_ -DSTM32H723xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32H723xx-o dm_mc02_h723_app/uart_rx_consumer.o -MD)
 I (..\App\uart_rx_consumer.h)(0x6A1EA8B1)
@@ -1176,12 +1176,12 @@ I (D:\KEIL\ARM\ARMCLANG\include\stdint.h)(0x5F36D0A8)
 I (..\Platform\platform_uart.h)(0x6A1E852E)
 I (..\Platform\platform_time.h)(0x6A1D8579)
 I (D:\KEIL\ARM\ARMCLANG\include\stddef.h)(0x5F36D0AE)
-F (..\App\mcu_info_app.c)(0x6A1EE674)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-D__MICROLIB -gdwarf-3 -O1 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -I ../Core/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32H7xx/Include -I ../Drivers/CMSIS/Include -I ../Platform -I ../BSP -I ../App -I ../Middleware -I ../Services-I./RTE/_dm_mc02_h723_app-ID:/KEIL/PACK/ARM/CMSIS/5.7.0/CMSIS/Core/Include-D__UVISION_VERSION="533" -D_RTE_ -DSTM32H723xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32H723xx-o dm_mc02_h723_app/mcu_info_app.o -MD)
-I (..\App\mcu_info_app.h)(0x6A1EE1BC)
+F (..\App\mcu_info_app.c)(0x6A1EEA2C)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-D__MICROLIB -gdwarf-3 -O1 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -I ../Core/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32H7xx/Include -I ../Drivers/CMSIS/Include -I ../Platform -I ../BSP -I ../App -I ../Middleware -I ../Services-I./RTE/_dm_mc02_h723_app-ID:/KEIL/PACK/ARM/CMSIS/5.7.0/CMSIS/Core/Include-D__UVISION_VERSION="533" -D_RTE_ -DSTM32H723xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32H723xx-o dm_mc02_h723_app/mcu_info_app.o -MD)
+I (..\App\mcu_info_app.h)(0x6A1EEA2D)
 I (D:\KEIL\ARM\ARMCLANG\include\stdint.h)(0x5F36D0A8)
 I (..\Middleware\protocol_frame.h)(0x6A1EC39F)
 I (..\Middleware\state_machine.h)(0x6A1E7945)
-I (..\Services\command_manager.h)(0x6A1EE1B5)
+I (..\Services\command_manager.h)(0x6A1EEA32)
 I (..\Middleware\ring_buffer.h)(0x6A1E7272)
 I (..\Platform\platform_time.h)(0x6A1D8579)
 I (..\Platform\platform_uart.h)(0x6A1E852E)
@@ -1212,18 +1212,18 @@ I (..\Services\protocol_manager.h)(0x6A1EE1B8)
 I (D:\KEIL\ARM\ARMCLANG\include\stdint.h)(0x5F36D0A8)
 I (..\Middleware\protocol_frame.h)(0x6A1EC39F)
 I (..\Middleware\state_machine.h)(0x6A1E7945)
-I (..\Services\command_manager.h)(0x6A1EE1B5)
+I (..\Services\command_manager.h)(0x6A1EEA32)
 I (..\Platform\platform_uart.h)(0x6A1E852E)
 I (..\Platform\platform_time.h)(0x6A1D8579)
 I (..\BSP\board_log.h)(0x6A1D856F)
 I (D:\KEIL\ARM\ARMCLANG\include\stdio.h)(0x5F36D0B4)
 I (D:\KEIL\ARM\ARMCLANG\include\string.h)(0x5F36D0A4)
-F (..\Services\command_manager.c)(0x6A1EE54A)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-D__MICROLIB -gdwarf-3 -O1 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -I ../Core/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32H7xx/Include -I ../Drivers/CMSIS/Include -I ../Platform -I ../BSP -I ../App -I ../Middleware -I ../Services-I./RTE/_dm_mc02_h723_app-ID:/KEIL/PACK/ARM/CMSIS/5.7.0/CMSIS/Core/Include-D__UVISION_VERSION="533" -D_RTE_ -DSTM32H723xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32H723xx-o dm_mc02_h723_app/command_manager.o -MD)
-I (..\Services\command_manager.h)(0x6A1EE1B5)
+F (..\Services\command_manager.c)(0x6A1EEA30)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-D__MICROLIB -gdwarf-3 -O1 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -I ../Core/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc -I ../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32H7xx/Include -I ../Drivers/CMSIS/Include -I ../Platform -I ../BSP -I ../App -I ../Middleware -I ../Services-I./RTE/_dm_mc02_h723_app-ID:/KEIL/PACK/ARM/CMSIS/5.7.0/CMSIS/Core/Include-D__UVISION_VERSION="533" -D_RTE_ -DSTM32H723xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32H723xx-o dm_mc02_h723_app/command_manager.o -MD)
+I (..\Services\command_manager.h)(0x6A1EEA32)
 I (D:\KEIL\ARM\ARMCLANG\include\stdint.h)(0x5F36D0A8)
 I (..\Middleware\protocol_frame.h)(0x6A1EC39F)
 I (..\Middleware\state_machine.h)(0x6A1E7945)
-I (..\App\mcu_info_app.h)(0x6A1EE1BC)
+I (..\App\mcu_info_app.h)(0x6A1EEA2D)
 I (..\Middleware\ring_buffer.h)(0x6A1E7272)
 I (..\BSP\board_log.h)(0x6A1D856F)
 I (D:\KEIL\ARM\ARMCLANG\include\string.h)(0x5F36D0A4)

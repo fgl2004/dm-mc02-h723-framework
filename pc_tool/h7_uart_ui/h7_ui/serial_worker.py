@@ -10,6 +10,10 @@ import serial.tools.list_ports
 
 from PySide6.QtCore import QObject, Signal
 
+from h7_proto.codec import ProtocolStreamParser, build_frame
+from h7_proto.constants import TYPE_EVENT, TYPE_NACK, TYPE_REQ, TYPE_RESP
+from h7_proto.frame import ProtoFrame
+
 from .telemetry import parse_uartstat_line
 
 
@@ -26,6 +30,11 @@ class SerialWorker(QObject):
     raw_line = Signal(str)
     uart_stat = Signal(object)
 
+    protocol_frame = Signal(object)
+    protocol_event = Signal(object)
+    protocol_response = Signal(object)
+    protocol_nack = Signal(object)
+
     tx_bytes_written = Signal(int)
     tx_queue_size_changed = Signal(int)
 
@@ -37,12 +46,14 @@ class SerialWorker(QObject):
         self._stop_event = threading.Event()
 
         self._lock = threading.Lock()
-        self._rx_buffer = bytearray()
+        self._rx_line_buffer = bytearray()
+        self._proto_parser = ProtocolStreamParser()
 
         self._tx_queue: queue.Queue[bytes] = queue.Queue()
         self._tx_queue_size = 0
 
         self._tx_chunk_max = 32
+        self._seq = 0
 
     def connect_port(self, port: str, baud: int) -> None:
         print(f"[DEBUG] SerialWorker.connect_port({port}, {baud})")
@@ -63,7 +74,9 @@ class SerialWorker(QObject):
 
             with self._lock:
                 self._ser = ser
-                self._rx_buffer.clear()
+                self._rx_line_buffer.clear()
+                self._proto_parser.reset()
+                self._seq = 0
                 self._clear_tx_queue_locked()
 
             self._stop_event.clear()
@@ -97,7 +110,8 @@ class SerialWorker(QObject):
 
                 self._ser = None
 
-            self._rx_buffer.clear()
+            self._rx_line_buffer.clear()
+            self._proto_parser.reset()
 
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=0.5)
@@ -132,6 +146,30 @@ class SerialWorker(QObject):
 
         self.tx_queue_size_changed.emit(queue_size)
 
+    def send_frame(
+        self,
+        frame_type: int,
+        seq: int,
+        cmd: int,
+        payload: bytes = b"",
+        flags: int = 0,
+    ) -> bytes:
+        frame = build_frame(
+            frame_type=frame_type,
+            flags=flags,
+            seq=seq,
+            cmd=cmd,
+            payload=payload,
+        )
+
+        self.enqueue_tx(frame)
+        return frame
+
+    def send_request(self, cmd: int, payload: bytes = b"") -> tuple[int, bytes]:
+        seq = self._next_seq()
+        frame = self.send_frame(TYPE_REQ, seq, cmd, payload)
+        return seq, frame
+
     def clear_tx_queue(self) -> None:
         print("[DEBUG] SerialWorker.clear_tx_queue()")
 
@@ -143,6 +181,15 @@ class SerialWorker(QObject):
     def get_tx_queue_size(self) -> int:
         with self._lock:
             return self._tx_queue_size
+
+    def _next_seq(self) -> int:
+        with self._lock:
+            self._seq = (self._seq + 1) & 0xFF
+
+            if self._seq == 0:
+                self._seq = 1
+
+            return self._seq
 
     def _clear_tx_queue_locked(self) -> None:
         while not self._tx_queue.empty():
@@ -185,30 +232,68 @@ class SerialWorker(QObject):
             if not data:
                 return
 
-            lines: list[str] = []
-
-            with self._lock:
-                self._rx_buffer.extend(data)
-
-                while b"\n" in self._rx_buffer:
-                    line_bytes, _, remain = self._rx_buffer.partition(b"\n")
-                    self._rx_buffer = bytearray(remain)
-
-                    line = line_bytes.decode("utf-8", errors="replace").strip("\r\n ")
-
-                    if line:
-                        lines.append(line)
-
-            for line in lines:
-                self.raw_line.emit(line)
-
-                stat = parse_uartstat_line(line, host_time=time.time())
-                if stat is not None:
-                    self.uart_stat.emit(stat)
+            self._process_protocol_bytes(data)
+            self._process_text_lines(data)
 
         except Exception as exc:
             if not self._stop_event.is_set():
                 self.error.emit(f"Serial RX error: {exc}")
+
+    def _process_protocol_bytes(self, data: bytes) -> None:
+        frames = self._proto_parser.feed(data)
+
+        for frame in frames:
+            self.protocol_frame.emit(frame)
+
+            if frame.frame_type == TYPE_EVENT:
+                self.protocol_event.emit(frame)
+            elif frame.frame_type == TYPE_RESP:
+                self.protocol_response.emit(frame)
+            elif frame.frame_type == TYPE_NACK:
+                self.protocol_nack.emit(frame)
+
+    def _process_text_lines(self, data: bytes) -> None:
+        """
+        Text log parser.
+
+        The same UART carries text logs and binary protocol frames.
+        Binary frames may contain arbitrary bytes, so this parser only emits
+        lines that look like known text logs.
+        """
+        lines: list[str] = []
+
+        with self._lock:
+            self._rx_line_buffer.extend(data)
+
+            if len(self._rx_line_buffer) > 4096:
+                self._rx_line_buffer = self._rx_line_buffer[-1024:]
+
+            while b"\n" in self._rx_line_buffer:
+                line_bytes, _, remain = self._rx_line_buffer.partition(b"\n")
+                self._rx_line_buffer = bytearray(remain)
+
+                line = line_bytes.decode("utf-8", errors="replace").strip("\r\n ")
+
+                marker_positions = [
+                    pos for pos in (line.find("@UARTSTAT"), line.find("["))
+                    if pos >= 0
+                ]
+
+                if marker_positions:
+                    line = line[min(marker_positions):].strip()
+
+                if not line:
+                    continue
+
+                if line.startswith("@UARTSTAT") or line.startswith("["):
+                    lines.append(line)
+
+        for line in lines:
+            self.raw_line.emit(line)
+
+            stat = parse_uartstat_line(line, host_time=time.time())
+            if stat is not None:
+                self.uart_stat.emit(stat)
 
     def _poll_tx(self, ser: serial.Serial) -> None:
         try:

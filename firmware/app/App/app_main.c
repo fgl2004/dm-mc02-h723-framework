@@ -35,7 +35,7 @@
 
 
 #define ENABLE_UART_RX_DUMP_TEST       0
-#define ENABLE_UART_RX_STATS_REPORT    0
+#define ENABLE_UART_RX_STATS_REPORT    1
 #define UART_RX_STATS_PERIOD_MS        100U
 
 #define ENABLE_UART_RX_SLOW_FAST_TEST   0
@@ -45,6 +45,7 @@
 #define ENABLE_PROTOCOL_MANAGER_TEST     1
 
 #define ENABLE_MCU_INFO_APP_EVENT_TEST     1
+#define MCU_INFO_APP_EVENT_TEST_PERIOD_MS         500U
 
 static PlatformResetInfo_t g_reset_info;
 
@@ -75,18 +76,44 @@ static AppTestStateMachineCtx_t g_sm_test_ctx;
 static void App_RunMcuInfoEventTest(void)
 {
 #if ENABLE_MCU_INFO_APP_EVENT_TEST
-    static uint8_t posted = 0U;
-    static const uint8_t test_payload[] = { 'T', 'E', 'S', 'T' };
+    static uint32_t last_post_ms = 0U;
+    static uint32_t event_counter = 0U;
 
-    if ((posted == 0U) && (PlatformTime_GetMs() > 3000U))
+    uint32_t now;
+    char payload[32];
+    int len;
+
+    now = PlatformTime_GetMs();
+
+    if ((now - last_post_ms) < MCU_INFO_APP_EVENT_TEST_PERIOD_MS)
     {
-        posted = 1U;
-
-        (void)McuInfoApp_PostEvent(MCU_INFO_APP_ID_USER,
-                                   MCU_INFO_EVENT_APP_MESSAGE,
-                                   test_payload,
-                                   (uint16_t)sizeof(test_payload));
+        return;
     }
+
+    last_post_ms = now;
+    event_counter++;
+
+    len = snprintf(payload,
+                   sizeof(payload),
+                   "EVT,%lu,%lu",
+                   (unsigned long)event_counter,
+                   (unsigned long)now);
+
+    if (len < 0)
+    {
+        return;
+    }
+
+    if (len >= (int)sizeof(payload))
+    {
+        len = (int)(sizeof(payload) - 1);
+        payload[len] = '\0';
+    }
+
+    (void)McuInfoApp_PostEvent(MCU_INFO_APP_ID_USER,
+                               MCU_INFO_EVENT_APP_MESSAGE,
+                               (const uint8_t *)payload,
+                               (uint16_t)len);
 #endif
 }
 static void App_TestProtocolFrame(void)
