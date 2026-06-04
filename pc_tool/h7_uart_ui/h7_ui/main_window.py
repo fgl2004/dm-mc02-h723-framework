@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QMessageBox,
     QCheckBox,
+    QTabWidget,
 )
 
 import pyqtgraph as pg
@@ -41,6 +42,23 @@ from h7_proto.constants import (
     MCU_INFO_CMD_GET_UART_STATS,
     MCU_INFO_CMD_GET_VERSION,
     MCU_INFO_CMD_PING,
+    IMU_APP_ID,
+    IMU_EVENT_ATTITUDE,
+    IMU_EVENT_ERROR,
+    IMU_EVENT_RAW_SAMPLE,
+    IMU_EVENT_STARTED,
+    IMU_EVENT_STOPPED,
+    IMU_CMD_GET_RAW,
+    IMU_CMD_GET_FILTERED,
+    IMU_CMD_GET_STATUS,
+    IMU_CMD_GET_ALGO_STATS,
+    IMU_CMD_SET_SAMPLE_RATE,
+    IMU_CMD_START_STREAM,
+    IMU_CMD_STOP_STREAM,
+    IMU_CMD_START,
+    IMU_CMD_STOP,
+    IMU_CMD_GET_ATTITUDE,
+    IMU_CMD_CLEAR_STATS,
     event_name,
     error_name,
 )
@@ -51,6 +69,8 @@ from .patterns import AVAILABLE_PATTERNS, make_pattern
 from .serial_worker import SerialWorker, list_serial_ports
 from .telemetry import UartStat
 from .ring_buffer_widget import RingBufferWidget
+from .imu_3d_widget import Imu3DWidget
+
 
 
 class MainWindow(QMainWindow):
@@ -69,6 +89,21 @@ class MainWindow(QMainWindow):
         self.avail_data = deque(maxlen=self.stats_history_len)
         self.high_data = deque(maxlen=self.stats_history_len)
         self.rx_rate_data = deque(maxlen=self.stats_history_len)
+
+        # IMU dashboard history
+        self.imu_history_len = 500
+        self.imu_t0: float | None = None
+        self.imu_time_data = deque(maxlen=self.imu_history_len)
+        self.imu_att_time_data = deque(maxlen=self.imu_history_len)
+        self.imu_ax_data = deque(maxlen=self.imu_history_len)
+        self.imu_ay_data = deque(maxlen=self.imu_history_len)
+        self.imu_az_data = deque(maxlen=self.imu_history_len)
+        self.imu_gx_data = deque(maxlen=self.imu_history_len)
+        self.imu_gy_data = deque(maxlen=self.imu_history_len)
+        self.imu_gz_data = deque(maxlen=self.imu_history_len)
+        self.imu_roll_data = deque(maxlen=self.imu_history_len)
+        self.imu_pitch_data = deque(maxlen=self.imu_history_len)
+        self.imu_yaw_data = deque(maxlen=self.imu_history_len)
 
         self.last_rx_bytes: int | None = None
         self.last_host_time: float | None = None
@@ -133,18 +168,29 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(root)
 
         layout.addWidget(self._build_connection_group())
+
+        self.main_tabs = QTabWidget()
+        self.main_tabs.addTab(self._build_protocol_diagnostic_tab(), "Protocol / Diagnostic")
+        self.main_tabs.addTab(self._build_imu_tab(), "IMU Dashboard")
+        layout.addWidget(self.main_tabs, stretch=1)
+
+        self.setCentralWidget(root)
+
+    def _build_protocol_diagnostic_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
         layout.addWidget(self._build_metrics_group())
 
         middle_layout = QHBoxLayout()
         middle_layout.addWidget(self._build_visual_group(), stretch=3)
         middle_layout.addWidget(self._build_protocol_group(), stretch=2)
-
         layout.addLayout(middle_layout, stretch=4)
 
         layout.addWidget(self._build_stress_group())
         layout.addWidget(self._build_log_group(), stretch=2)
 
-        self.setCentralWidget(root)
+        return page
 
     def _build_connection_group(self) -> QGroupBox:
         group = QGroupBox("Connection")
@@ -343,6 +389,150 @@ class MainWindow(QMainWindow):
 
         return group
 
+    def _build_imu_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        top_layout = QHBoxLayout()
+        top_layout.addWidget(self._build_imu_control_group(), stretch=1)
+        top_layout.addWidget(self._build_imu_numeric_group(), stretch=3)
+        layout.addLayout(top_layout, stretch=1)
+
+        middle_layout = QHBoxLayout()
+        middle_layout.addWidget(self._build_imu_scope_group(), stretch=3)
+        middle_layout.addWidget(self._build_imu_3d_group(), stretch=2)
+        layout.addLayout(middle_layout, stretch=4)
+
+        layout.addWidget(self._build_imu_log_group(), stretch=1)
+
+        return page
+
+    def _build_imu_control_group(self) -> QGroupBox:
+        group = QGroupBox("IMU Control")
+        layout = QGridLayout(group)
+
+        self.imu_start_btn = QPushButton("START")
+        self.imu_stop_btn = QPushButton("STOP")
+        self.imu_start_stream_btn = QPushButton("START STREAM")
+        self.imu_stop_stream_btn = QPushButton("STOP STREAM")
+
+        self.imu_status_btn = QPushButton("GET STATUS")
+        self.imu_raw_btn = QPushButton("GET RAW")
+        self.imu_filtered_btn = QPushButton("GET FILTERED")
+        self.imu_attitude_btn = QPushButton("GET ATTITUDE")
+        self.imu_stats_btn = QPushButton("GET STATS")
+        self.imu_clear_btn = QPushButton("CLEAR STATS")
+
+        self.imu_period_spin = QSpinBox()
+        self.imu_period_spin.setRange(1, 1000)
+        self.imu_period_spin.setValue(10)
+        self.imu_period_spin.setSuffix(" ms")
+        self.imu_set_period_btn = QPushButton("SET PERIOD")
+
+        layout.addWidget(self.imu_start_btn, 0, 0)
+        layout.addWidget(self.imu_stop_btn, 0, 1)
+        layout.addWidget(self.imu_start_stream_btn, 1, 0)
+        layout.addWidget(self.imu_stop_stream_btn, 1, 1)
+
+        layout.addWidget(self.imu_status_btn, 2, 0)
+        layout.addWidget(self.imu_raw_btn, 2, 1)
+        layout.addWidget(self.imu_filtered_btn, 3, 0)
+        layout.addWidget(self.imu_attitude_btn, 3, 1)
+        layout.addWidget(self.imu_stats_btn, 4, 0)
+        layout.addWidget(self.imu_clear_btn, 4, 1)
+
+        layout.addWidget(QLabel("Sample period:"), 5, 0)
+        layout.addWidget(self.imu_period_spin, 5, 1)
+        layout.addWidget(self.imu_set_period_btn, 6, 0, 1, 2)
+
+        return group
+
+    def _build_imu_numeric_group(self) -> QGroupBox:
+        group = QGroupBox("IMU Numeric Data")
+        layout = QGridLayout(group)
+
+        self.imu_value_labels: dict[str, QLabel] = {}
+
+        names = [
+            "state", "started", "stream", "err", "sample", "period",
+            "ax", "ay", "az", "gx", "gy", "gz", "temp", "tick",
+            "ax_mg", "ay_mg", "az_mg", "gx_mdps", "gy_mdps", "gz_mdps", "temp_mc",
+            "roll", "pitch", "yaw", "q0", "q1", "q2", "q3",
+            "read_err", "att", "att_err", "evt", "drop", "read_us", "algo_us", "run_us",
+        ]
+
+        for idx, name in enumerate(names):
+            row = idx // 6
+            col = (idx % 6) * 2
+            layout.addWidget(QLabel(name + ":"), row, col)
+            value_label = QLabel("-")
+            value_label.setMinimumWidth(72)
+            value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            layout.addWidget(value_label, row, col + 1)
+            self.imu_value_labels[name] = value_label
+
+        return group
+
+    def _build_imu_scope_group(self) -> QGroupBox:
+        group = QGroupBox("IMU Attitude Oscilloscope")
+        layout = QVBoxLayout(group)
+
+        self.imu_scope_window_spin = QSpinBox()
+        self.imu_scope_window_spin.setRange(3, 120)
+        self.imu_scope_window_spin.setValue(15)
+        self.imu_scope_window_spin.setSuffix(" s")
+
+        scope_header = QHBoxLayout()
+        scope_header.addWidget(QLabel("Display window:"))
+        scope_header.addWidget(self.imu_scope_window_spin)
+        scope_header.addStretch(1)
+        layout.addLayout(scope_header)
+
+        self.imu_plot_attitude = pg.PlotWidget(title="Attitude: roll / pitch / yaw (deg)")
+        self.imu_plot_attitude.showGrid(x=True, y=True)
+        self.imu_plot_attitude.setLabel("bottom", "time", units="s")
+        self.imu_plot_attitude.setLabel("left", "angle", units="deg")
+        self.imu_plot_attitude.setMouseEnabled(x=True, y=True)
+        self.imu_plot_attitude.enableAutoRange(axis=pg.ViewBox.XYAxes, enable=False)
+
+        self.imu_plot_attitude.addLegend(offset=(10, 10))
+        self.imu_curve_roll = self.imu_plot_attitude.plot(
+            name="roll",
+            pen=pg.mkPen("#ff4d4d", width=2),
+        )
+        self.imu_curve_pitch = self.imu_plot_attitude.plot(
+            name="pitch",
+            pen=pg.mkPen("#4dff88", width=2),
+        )
+        self.imu_curve_yaw = self.imu_plot_attitude.plot(
+            name="yaw",
+            pen=pg.mkPen("#66a3ff", width=2),
+        )
+
+        layout.addWidget(self.imu_plot_attitude, stretch=1)
+
+        return group
+
+    def _build_imu_3d_group(self) -> QGroupBox:
+        group = QGroupBox("3D Attitude View")
+        layout = QVBoxLayout(group)
+
+        self.imu_3d_widget = Imu3DWidget()
+        layout.addWidget(self.imu_3d_widget, stretch=1)
+
+        return group
+
+    def _build_imu_log_group(self) -> QGroupBox:
+        group = QGroupBox("IMU Log")
+        layout = QVBoxLayout(group)
+
+        self.imu_log_text = QTextEdit()
+        self.imu_log_text.setReadOnly(True)
+        self.imu_log_text.setMinimumHeight(120)
+
+        layout.addWidget(self.imu_log_text)
+        return group
+
     def _build_stress_group(self) -> QGroupBox:
         group = QGroupBox("Stress Test / TX Rate Control")
         layout = QHBoxLayout(group)
@@ -471,6 +661,38 @@ class MainWindow(QMainWindow):
         self.diag_clear_btn.clicked.connect(
             lambda: self._send_protocol_command(DIAG_CMD_CLEAR_COUNTERS, "CLEAR_COUNTERS")
         )
+
+        self.imu_start_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_START, "IMU_START")
+        )
+        self.imu_stop_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_STOP, "IMU_STOP")
+        )
+        self.imu_start_stream_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_START_STREAM, "IMU_START_STREAM")
+        )
+        self.imu_stop_stream_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_STOP_STREAM, "IMU_STOP_STREAM")
+        )
+        self.imu_status_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_GET_STATUS, "IMU_GET_STATUS")
+        )
+        self.imu_raw_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_GET_RAW, "IMU_GET_RAW")
+        )
+        self.imu_filtered_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_GET_FILTERED, "IMU_GET_FILTERED")
+        )
+        self.imu_attitude_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_GET_ATTITUDE, "IMU_GET_ATTITUDE")
+        )
+        self.imu_stats_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_GET_ALGO_STATS, "IMU_GET_ALGO_STATS")
+        )
+        self.imu_clear_btn.clicked.connect(
+            lambda: self._send_protocol_command(IMU_CMD_CLEAR_STATS, "IMU_CLEAR_STATS")
+        )
+        self.imu_set_period_btn.clicked.connect(self._send_imu_set_period)
 
         self.proto_auto_poll_check.stateChanged.connect(self._on_protocol_auto_poll_changed)
         self.proto_poll_interval_spin.valueChanged.connect(self._on_protocol_poll_interval_changed)
@@ -621,13 +843,13 @@ class MainWindow(QMainWindow):
     # Protocol monitor
     # -------------------------------------------------------------------------
 
-    def _send_protocol_command(self, cmd: int, name: str) -> None:
+    def _send_protocol_command(self, cmd: int, name: str, payload: bytes = b"") -> None:
         if not self.serial_worker.is_open():
             self._append_protocol_log(f"[ERROR] Port is not open, cannot send {name}")
             return
 
         try:
-            seq, frame = self.serial_worker.send_request(cmd)
+            seq, frame = self.serial_worker.send_request(cmd, payload)
         except Exception as exc:
             self._append_protocol_log(f"[ERROR] send {name} failed: {exc}")
             return
@@ -636,9 +858,21 @@ class MainWindow(QMainWindow):
         self.protocol_last_seq = seq
         self._update_protocol_labels()
 
-        self._append_protocol_log(
-            f"[TX] {name}: seq={seq}, cmd=0x{cmd:02X}, bytes={frame.hex(' ').upper()}"
-        )
+        payload_text = payload.decode("utf-8", errors="replace") if payload else ""
+        if payload_text:
+            self._append_protocol_log(
+                f"[TX] {name}: seq={seq}, cmd=0x{cmd:02X}, payload=[{payload_text}], "
+                f"bytes={frame.hex(' ').upper()}"
+            )
+        else:
+            self._append_protocol_log(
+                f"[TX] {name}: seq={seq}, cmd=0x{cmd:02X}, bytes={frame.hex(' ').upper()}"
+            )
+
+    def _send_imu_set_period(self) -> None:
+        period_ms = self.imu_period_spin.value()
+        payload = str(period_ms).encode("ascii")
+        self._send_protocol_command(IMU_CMD_SET_SAMPLE_RATE, "IMU_SET_SAMPLE_RATE", payload)
 
     def _on_protocol_auto_poll_changed(self) -> None:
         if self.proto_auto_poll_check.isChecked():
@@ -687,6 +921,8 @@ class MainWindow(QMainWindow):
             f"len={len(frame.payload)}, payload=[{text}], raw={frame.payload_hex()}"
         )
 
+        self._handle_imu_response(frame)
+
     def _on_protocol_nack(self, frame: ProtoFrame) -> None:
         self.protocol_nack_count += 1
         self._update_protocol_labels()
@@ -709,6 +945,8 @@ class MainWindow(QMainWindow):
             f"{event_summary(event)}"
         )
 
+        self._handle_imu_event(event)
+
     def _update_protocol_labels(self) -> None:
         self.protocol_labels["frames"].setText(str(self.protocol_frame_count))
         self.protocol_labels["resp"].setText(str(self.protocol_resp_count))
@@ -716,6 +954,279 @@ class MainWindow(QMainWindow):
         self.protocol_labels["event"].setText(str(self.protocol_event_count))
         self.protocol_labels["tx_req"].setText(str(self.protocol_tx_req_count))
         self.protocol_labels["last_seq"].setText(str(self.protocol_last_seq))
+
+    # -------------------------------------------------------------------------
+    # IMU dashboard
+    # -------------------------------------------------------------------------
+
+    def _parse_kv_payload(self, text: str) -> dict[str, str]:
+        data: dict[str, str] = {}
+
+        for item in text.split(","):
+            item = item.strip()
+            if "=" not in item:
+                continue
+
+            key, value = item.split("=", 1)
+            data[key.strip()] = value.strip()
+
+        return data
+
+    def _kv_int(self, data: dict[str, str], key: str, default: int = 0) -> int:
+        try:
+            return int(data.get(key, str(default)), 0)
+        except ValueError:
+            return default
+
+    def _set_imu_value(self, key: str, value) -> None:
+        label = self.imu_value_labels.get(key)
+        if label is not None:
+            label.setText(str(value))
+
+    def _handle_imu_response(self, frame: ProtoFrame) -> None:
+        if frame.cmd not in {
+            IMU_CMD_GET_RAW,
+            IMU_CMD_GET_FILTERED,
+            IMU_CMD_GET_STATUS,
+            IMU_CMD_GET_ALGO_STATS,
+            IMU_CMD_SET_SAMPLE_RATE,
+            IMU_CMD_START_STREAM,
+            IMU_CMD_STOP_STREAM,
+            IMU_CMD_START,
+            IMU_CMD_STOP,
+            IMU_CMD_GET_ATTITUDE,
+            IMU_CMD_CLEAR_STATS,
+        }:
+            return
+
+        text = frame.payload_ascii()
+        data = self._parse_kv_payload(text)
+        self._append_imu_log(f"[RESP] cmd=0x{frame.cmd:02X}, payload=[{text}]")
+
+        if frame.cmd == IMU_CMD_GET_STATUS:
+            self._update_imu_status(data)
+        elif frame.cmd == IMU_CMD_GET_RAW:
+            self._update_imu_raw(data, source="RESP")
+        elif frame.cmd == IMU_CMD_GET_FILTERED:
+            self._update_imu_filtered(data)
+        elif frame.cmd == IMU_CMD_GET_ATTITUDE:
+            self._update_imu_attitude_from_response(data)
+        elif frame.cmd == IMU_CMD_GET_ALGO_STATS:
+            self._update_imu_stats(data)
+        elif frame.cmd == IMU_CMD_SET_SAMPLE_RATE:
+            self._set_imu_value("period", data.get("period", "-"))
+            self._append_imu_log(f"[IMU] sample period set: {text}")
+        elif frame.cmd == IMU_CMD_START:
+            self._set_imu_value("started", "1")
+            self._append_imu_log("[IMU] started")
+        elif frame.cmd == IMU_CMD_STOP:
+            self._set_imu_value("started", "0")
+            self._set_imu_value("stream", "0")
+            self._append_imu_log("[IMU] stopped")
+        elif frame.cmd == IMU_CMD_START_STREAM:
+            self._set_imu_value("stream", "1")
+            self._append_imu_log("[IMU] stream started")
+        elif frame.cmd == IMU_CMD_STOP_STREAM:
+            self._set_imu_value("stream", "0")
+            self._append_imu_log("[IMU] stream stopped")
+        elif frame.cmd == IMU_CMD_CLEAR_STATS:
+            self._append_imu_log("[IMU] stats cleared")
+
+    def _handle_imu_event(self, event) -> None:
+        if event is None:
+            return
+
+        if event.app_id != IMU_APP_ID:
+            return
+
+        text = event.data_ascii()
+        data = self._parse_kv_payload(text)
+
+        self._append_imu_log(
+            f"[EVENT] id=0x{event.event_id:02X}({event_name(event.event_id)}), "
+            f"tick={event.tick_ms}, data=[{text}]"
+        )
+
+        if event.event_id == IMU_EVENT_ATTITUDE:
+            self._update_imu_attitude_from_event(data, event.tick_ms)
+        elif event.event_id == IMU_EVENT_STARTED:
+            self._set_imu_value("started", "1")
+        elif event.event_id == IMU_EVENT_STOPPED:
+            self._set_imu_value("started", "0")
+            self._set_imu_value("stream", "0")
+        elif event.event_id == IMU_EVENT_ERROR:
+            self._set_imu_value("err", text)
+        elif event.event_id == IMU_EVENT_RAW_SAMPLE:
+            self._update_imu_raw(data, source="EVENT")
+
+    def _update_imu_status(self, data: dict[str, str]) -> None:
+        for key in ["state", "started", "stream", "err", "sample", "period"]:
+            if key in data:
+                self._set_imu_value(key, data[key])
+
+    def _update_imu_raw(self, data: dict[str, str], source: str) -> None:
+        for key in ["ax", "ay", "az", "gx", "gy", "gz", "temp", "tick"]:
+            if key in data:
+                self._set_imu_value(key, data[key])
+
+        ax = self._kv_int(data, "ax")
+        ay = self._kv_int(data, "ay")
+        az = self._kv_int(data, "az")
+        gx = self._kv_int(data, "gx")
+        gy = self._kv_int(data, "gy")
+        gz = self._kv_int(data, "gz")
+
+        t_ms = self._kv_int(data, "tick", int(time.time() * 1000))
+        self._append_imu_sample_time(t_ms)
+
+        self.imu_ax_data.append(ax)
+        self.imu_ay_data.append(ay)
+        self.imu_az_data.append(az)
+        self.imu_gx_data.append(gx)
+        self.imu_gy_data.append(gy)
+        self.imu_gz_data.append(gz)
+
+        self._append_imu_log(f"[IMU {source}] raw ax={ax}, ay={ay}, az={az}, gx={gx}, gy={gy}, gz={gz}")
+
+    def _update_imu_filtered(self, data: dict[str, str]) -> None:
+        for key in ["ax_mg", "ay_mg", "az_mg", "gx_mdps", "gy_mdps", "gz_mdps", "temp_mc", "tick"]:
+            if key in data:
+                self._set_imu_value(key, data[key])
+
+    def _update_imu_attitude_from_response(self, data: dict[str, str]) -> None:
+        roll = self._kv_int(data, "roll_cdeg") / 100.0
+        pitch = self._kv_int(data, "pitch_cdeg") / 100.0
+        yaw = self._kv_int(data, "yaw_cdeg") / 100.0
+
+        self._set_imu_value("roll", f"{roll:.2f}")
+        self._set_imu_value("pitch", f"{pitch:.2f}")
+        self._set_imu_value("yaw", f"{yaw:.2f}")
+
+        for key, scale in [("q0", 1000.0), ("q1", 1000.0), ("q2", 1000.0), ("q3", 1000.0)]:
+            raw_key = key + "_m"
+            if raw_key in data:
+                self._set_imu_value(key, f"{self._kv_int(data, raw_key) / scale:.3f}")
+
+        if "tick" in data:
+            self._set_imu_value("tick", data["tick"])
+            self._append_imu_attitude_time(self._kv_int(data, "tick"))
+        else:
+            self._append_imu_attitude_time(int(time.time() * 1000))
+
+        self.imu_roll_data.append(roll)
+        self.imu_pitch_data.append(pitch)
+        self.imu_yaw_data.append(yaw)
+        self._update_imu_plots()
+        self._update_imu_3d_placeholder(roll, pitch, yaw)
+
+    def _update_imu_attitude_from_event(self, data: dict[str, str], event_tick_ms: int) -> None:
+        roll = self._kv_int(data, "r") / 100.0
+        pitch = self._kv_int(data, "p") / 100.0
+        yaw = self._kv_int(data, "y") / 100.0
+        tick = self._kv_int(data, "t", event_tick_ms)
+
+        self._set_imu_value("roll", f"{roll:.2f}")
+        self._set_imu_value("pitch", f"{pitch:.2f}")
+        self._set_imu_value("yaw", f"{yaw:.2f}")
+        self._set_imu_value("tick", str(tick))
+
+        self._append_imu_attitude_time(tick)
+        self.imu_roll_data.append(roll)
+        self.imu_pitch_data.append(pitch)
+        self.imu_yaw_data.append(yaw)
+
+        self._update_imu_plots()
+        self._update_imu_3d_placeholder(roll, pitch, yaw)
+
+    def _update_imu_stats(self, data: dict[str, str]) -> None:
+        key_map = {
+            "sample": "sample",
+            "read_err": "read_err",
+            "att": "att",
+            "att_err": "att_err",
+            "evt": "evt",
+            "drop": "drop",
+            "read_us": "read_us",
+            "algo_us": "algo_us",
+            "run_us": "run_us",
+        }
+        for src, dst in key_map.items():
+            if src in data:
+                self._set_imu_value(dst, data[src])
+
+    def _append_imu_sample_time(self, tick_ms: int) -> None:
+        t = tick_ms / 1000.0
+        if self.imu_t0 is None:
+            self.imu_t0 = t
+        self.imu_time_data.append(t - self.imu_t0)
+
+    def _append_imu_attitude_time(self, tick_ms: int) -> None:
+        t = tick_ms / 1000.0
+        if self.imu_t0 is None:
+            self.imu_t0 = t
+        self.imu_att_time_data.append(t - self.imu_t0)
+
+    def _update_imu_plots(self) -> None:
+        x = list(self.imu_att_time_data)
+        roll = list(self.imu_roll_data)
+        pitch = list(self.imu_pitch_data)
+        yaw = list(self.imu_yaw_data)
+
+        n = min(len(x), len(roll), len(pitch), len(yaw))
+        if n <= 0:
+            return
+
+        x = x[-n:]
+        roll = roll[-n:]
+        pitch = pitch[-n:]
+        yaw = yaw[-n:]
+
+        self.imu_curve_roll.setData(x, roll)
+        self.imu_curve_pitch.setData(x, pitch)
+        self.imu_curve_yaw.setData(x, yaw)
+
+        self._auto_range_imu_attitude_plot(x, roll, pitch, yaw)
+
+    def _auto_range_imu_attitude_plot(self, x: list[float], roll: list[float], pitch: list[float], yaw: list[float]) -> None:
+        if not x:
+            return
+
+        window_s = float(self.imu_scope_window_spin.value()) if hasattr(self, "imu_scope_window_spin") else 15.0
+        x_max = x[-1]
+        x_min = max(0.0, x_max - window_s)
+
+        visible_values: list[float] = []
+        for idx, xv in enumerate(x):
+            if xv >= x_min:
+                visible_values.append(roll[idx])
+                visible_values.append(pitch[idx])
+                visible_values.append(yaw[idx])
+
+        if not visible_values:
+            visible_values = roll + pitch + yaw
+
+        y_min = min(visible_values)
+        y_max = max(visible_values)
+
+        if y_min == y_max:
+            margin = 1.0
+        else:
+            margin = max(1.0, (y_max - y_min) * 0.18)
+
+        if x_max <= x_min:
+            x_max = x_min + 1.0
+
+        self.imu_plot_attitude.setXRange(x_min, x_max, padding=0.02)
+        self.imu_plot_attitude.setYRange(y_min - margin, y_max + margin, padding=0.0)
+
+    def _update_imu_3d_placeholder(self, roll: float, pitch: float, yaw: float) -> None:
+        if hasattr(self, "imu_3d_widget"):
+            self.imu_3d_widget.set_euler(roll, pitch, yaw)
+
+    def _append_imu_log(self, text: str) -> None:
+        print(text)
+        self.imu_log_text.append(text)
+        self.imu_log_text.moveCursor(QTextCursor.End)
 
     # -------------------------------------------------------------------------
     # TX / stress

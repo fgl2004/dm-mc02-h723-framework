@@ -1342,37 +1342,260 @@ Stage 3 V1 完成标准：
 
 建立硬件传感器数据流和物理算法闭环。
 
----
+该阶段在 Stage 2 通信框架和 Stage 3 诊断框架的基础上，引入 BMI088 六轴 IMU，完成从硬件采样、BSP 驱动、App 状态机、姿态解算、命令查询、事件上报到 PC 可视化的完整闭环。
 
-### 9.2 Planned Tasks
+本阶段重点不是单纯读取 IMU 数据，而是建立一个可扩展的 IMU 子系统：
 
-| 任务                      | 状态          | 说明                  |
-| ----------------------- | ----------- | ------------------- |
-| BMI088 驱动适配             | Not Started | 需确认 SPI/I2C 接口      |
-| IMU 数据读取                | Not Started | 加速度计、陀螺仪            |
-| 数据时间戳                   | Not Started | 保证采样时序可分析           |
-| 一阶低通滤波                  | Not Started | 基础滤波算法              |
-| 中值滤波                    | Not Started | 抗尖峰                 |
-| 零偏估计                    | Not Started | 静止状态下估计 gyro bias   |
-| 静止检测                    | Not Started | 基于加速度/角速度判断         |
-| Algorithm Stats         | Not Started | 运行次数、最大耗时、错误次数      |
-| LCD/串口显示                | Not Started | 可视化 IMU 状态          |
-| McuInfoApp IMU Snapshot | Planned     | IMU 状态后续通过信息中枢上报 PC |
 
----
+Platform SPI
+↓
+BMI088 BSP
+↓
+ImuApp
+↓
+Attitude Estimator
+↓
+CommandService / McuInfoApp / DiagnosticApp
+↓
+PC IMU Dashboard / 3D Attitude View
 
-### 9.3 Acceptance Criteria
-
-```text
-1. IMU 原始数据稳定输出
-2. 滤波后数据可观察
-3. 算法执行时间可统计
-4. 静止检测基本有效
-5. 异常数据能够被计数
-6. IMU 关键状态可以通过 McuInfoApp 上报或查询
-```
 
 ---
+
+### 9.2 Current Design
+
+#### 9.2.1 Driver Layer
+
+IMU 驱动分为两层：
+
+
+platform_spi
+
+只负责通用 SPI 阻塞收发
+只管理 SPI 设备号、CS 控制、SPI 统计
+不包含 BMI088 寄存器语义
+
+bsp_bmi088
+
+负责 BMI088 寄存器定义
+负责 Accel / Gyro Chip ID 检测
+负责 BMI088 初始化
+负责加速度计、陀螺仪、温度 raw 数据读取
+
+该分层保证后续更换 IMU 或扩展其他 SPI 设备时，不需要破坏 Platform 层。
+
+---
+
+#### 9.2.2 IMU App Layer
+
+`ImuApp` 作为 Stage 4 的业务中心，负责：
+
+管理 IMU 状态机
+周期读取 BMI088 原始数据
+维护 raw / scaled / attitude 缓存
+调用姿态解算算法
+维护 IMU 运行统计
+注册 IMU 命令
+通过 McuInfoApp 上报 IMU EVENT
+为 DiagnosticApp 后续聚合预留接口
+
+状态机复用通用 `StateMachine` 模块，不再为 IMU 单独写一套状态管理逻辑。
+
+---
+
+#### 9.2.3 Algorithm Layer
+
+当前姿态解算第一版采用六轴互补滤波：
+
+
+roll / pitch:
+gyro 积分 + accel 重力方向修正
+
+yaw:
+gyro 积分
+
+
+由于 BMI088 是六轴 IMU，不包含磁力计，因此：
+
+
+roll / pitch 在静止和低动态场景下相对可信
+yaw 只能短时间观察，会随时间漂移
+
+
+后续可在该接口基础上扩展 Mahony / Madgwick / EKF 等姿态算法。
+
+---
+
+#### 9.2.4 PC Visualization
+
+当前不再规划 LCD 显示，所有可视化优先通过 PC 上位机完成。
+
+PC 端 IMU Dashboard 包含：
+
+IMU 控制按钮
+IMU 原始数据 / 姿态数据 / 算法统计显示
+roll / pitch / yaw 实时曲线
+3D 姿态显示区域
+IMU EVENT 日志
+
+LCD 显示从本阶段移除，后续如有独立屏幕需求，可作为硬件显示扩展任务重新规划。
+
+---
+
+### 9.3 Planned Tasks
+
+| 任务 | 状态 | 说明 |
+| --- | --- | --- |
+| SPI2 CubeMX 配置 | Done | 使用 SPI2，阻塞通信，软件 CS |
+| Platform SPI 层 | Done | 通用 SPI 设备访问，不包含 BMI088 语义 |
+| BMI088 BSP 驱动适配 | Done | 已完成 Chip ID、初始化、raw 数据读取 |
+| BMI088 原始数据验证 | Done | Acc ID = 0x1E，Gyro ID = 0x0F，raw 数据稳定 |
+| IMU App 状态机 | Done | 复用通用 StateMachine，支持 READY / RUNNING / ERROR |
+| IMU 周期采样 | Done | ImuApp_Run 周期读取 BMI088 数据 |
+| 数据时间戳 | Done | raw / attitude 数据带 tick_ms |
+| 姿态解算第一版 | Done | 已实现 6-axis complementary filter |
+| Quaternion 输出接口 | Done | 由 roll / pitch / yaw 换算得到 q0/q1/q2/q3 |
+| IMU 命令注册 | Done | 通过 McuInfoApp / CommandService 注册 IMU 命令 |
+| IMU 命令查询 | Done | 支持 GET_RAW / GET_FILTERED / GET_STATUS / GET_ATTITUDE / GET_STATS |
+| IMU START / STOP | Done | 支持启动和停止 IMU 采样任务 |
+| IMU EVENT Stream | Done | 支持 START_STREAM / STOP_STREAM，姿态 EVENT 上报 |
+| PC IMU 测试脚本 | Done | 已完成 proto_imu_test.py |
+| PC IMU Dashboard | Done | 已完成第二界面、按钮、曲线、数据解析 |
+| PC 3D 姿态显示 | In Progress | 已接入 OpenGL 3D Widget，需继续调试坐标方向 |
+| Algorithm Stats | Done | 已统计采样次数、算法次数、耗时、错误次数 |
+| 一阶低通滤波 | Not Started | 后续用于 raw / scaled 数据平滑 |
+| 中值滤波 | Not Started | 后续用于抗尖峰数据 |
+| 零偏估计 | Not Started | 静止状态下估计 gyro bias |
+| 静止检测 | Not Started | 基于 acc norm 和 gyro norm 判断静止 |
+| 异常样本检测 | Planned | 检测突变、超范围、时间间隔异常 |
+| DiagnosticApp 聚合 IMU 状态 | Planned | 将 IMU stats 接入 Stage 3 诊断框架 |
+| McuInfoApp IMU Snapshot | Planned | 后续将 IMU 状态作为 snapshot 快速查询 |
+| Stream 通道 | Planned | 当前先走 EVENT，后续高频数据迁移到 Stream |
+| 姿态算法升级 | Planned | 后续扩展 Mahony / Madgwick / EKF |
+| 坐标系标定 | Planned | 校正 roll / pitch / yaw 与 PC 3D 坐标方向关系 |
+| PC 3D UI 优化 | Planned | 增加 Reset View、Reset Attitude、模型方向校准 |
+
+---
+
+### 9.4 IMU Command List
+
+当前 IMU 命令域为：
+
+
+0x30 IMU_GET_RAW
+0x31 IMU_GET_FILTERED
+0x32 IMU_GET_STATUS
+0x36 IMU_GET_ALGO_STATS
+0x37 IMU_SET_SAMPLE_RATE
+0x38 IMU_START_STREAM
+0x39 IMU_STOP_STREAM
+0x3A IMU_START
+0x3B IMU_STOP
+0x3C IMU_GET_ATTITUDE
+0x3D IMU_CLEAR_STATS
+
+
+---
+
+### 9.5 IMU Event List
+
+当前 IMU EVENT 初步规划：
+
+
+0x90 IMU_EVENT_STARTED
+0x91 IMU_EVENT_STOPPED
+0x95 IMU_EVENT_ERROR
+0x97 IMU_EVENT_ATTITUDE
+0x98 IMU_EVENT_RAW_SAMPLE
+
+
+payload 格式：
+
+
+att,t=123456,r=123,p=-45,y=2340
+
+
+---
+
+### 9.6 Data Flow
+
+#### 9.6.1 Command Query Path
+
+
+PC Button / Python Script
+↓
+ProtocolManager
+↓
+CommandManager
+↓
+CommandService
+↓
+ImuApp Command Handler
+↓
+RESP
+↓
+PC Dashboard
+
+
+#### 9.6.2 Event Stream Path
+
+
+ImuApp_Run
+↓
+BspBmi088_ReadRaw
+↓
+AttitudeEstimator_Update6Axis
+↓
+McuInfoApp_PostEvent
+↓
+McuInfoApp_Run
+↓
+ProtocolManager_Process
+↓
+EVENT Frame
+↓
+PC Dashboard / 3D View
+
+
+---
+
+### 9.7 Acceptance Criteria
+
+BMI088 Accel Chip ID 稳定读取为 0x1E
+BMI088 Gyro Chip ID 稳定读取为 0x0F
+IMU 原始数据能够稳定输出
+静止状态下 gyro raw 接近零附近小幅波动
+静止状态下 accel 某一轴能够反映重力方向
+PC 可以通过命令查询 IMU raw 数据
+PC 可以通过命令查询 roll / pitch / yaw
+PC 可以通过命令查询 IMU algorithm stats
+IMU START / STOP 命令能够正确切换 App 状态
+IMU START_STREAM / STOP_STREAM 能够控制 EVENT 上报
+EVENT 姿态流可以被 PC 正确解析
+PC IMU Dashboard 可以显示数值和姿态曲线
+PC 3D UI 可以根据 roll / pitch / yaw 实时更新模型姿态
+算法执行时间可以统计
+采样间隔可以统计
+异常读取和算法错误能够计数
+IMU 关键状态可以通过 McuInfoApp 暴露给 PC
+
+---
+
+### 9.8 Future Extensions
+
+一阶低通滤波 / 中值滤波 / 滑动平均滤波 / 尖峰剔除
+Gyro 零偏估计 / 校准 / 清除
+静止检测
+高级姿态算法（Mahony / Madgwick / EKF / Error-State）
+Stream 通道用于高频 raw / scaled 数据
+PC 3D UI 增强（Reset View / Reset Attitude / 坐标校准 / 模型方向 / 数据录制）
+
+---
+
+
+
+
+
 
 ## 10. Stage 5: FDCAN Communication
 

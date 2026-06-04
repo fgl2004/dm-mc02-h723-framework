@@ -16,6 +16,9 @@
 #include "mcu_info_app.h"
 #include "diagnostic_app.h"
 
+#include "platform_spi.h"
+#include "bsp_bmi088.h"
+#include "imu_app.h"
 
 #include <stdio.h>
 
@@ -45,8 +48,13 @@
 
 #define ENABLE_PROTOCOL_MANAGER_TEST     1
 
-#define ENABLE_MCU_INFO_APP_EVENT_TEST     1
+#define ENABLE_MCU_INFO_APP_EVENT_TEST     0
 #define MCU_INFO_APP_EVENT_TEST_PERIOD_MS         500U
+
+
+#define ENABLE_BMI088_BSP_TEST           0
+#define BMI088_BSP_TEST_PERIOD_MS        500U
+
 
 static PlatformResetInfo_t g_reset_info;
 
@@ -74,9 +82,66 @@ typedef struct
 
 static AppTestStateMachineCtx_t g_sm_test_ctx;
 
+static void App_RunBmi088BspTest(void)
+{
+#if ENABLE_BMI088_BSP_TEST
+    static uint32_t last_test_ms = 0U;
+    static uint32_t test_count = 0U;
+
+    uint32_t now;
+    BspBmi088ChipId_t chip_id;
+    BspBmi088RawData_t raw;
+    int ret;
+
+    now = PlatformTime_GetMs();
+
+    if ((now - last_test_ms) < BMI088_BSP_TEST_PERIOD_MS)
+    {
+        return;
+    }
+
+    last_test_ms = now;
+    test_count++;
+
+    ret = BspBmi088_ReadChipId(&chip_id);
+    if (ret != BSP_BMI088_OK)
+    {
+        BoardLog_Error("[BMI088_TEST] #%lu ReadChipId failed, ret=%d\r\n",
+                       (unsigned long)test_count,
+                       ret);
+        return;
+    }
+
+    ret = BspBmi088_ReadRaw(&raw);
+    if (ret != BSP_BMI088_OK)
+    {
+        BoardLog_Error("[BMI088_TEST] #%lu ReadRaw failed, ret=%d, acc_id=0x%02X, gyro_id=0x%02X\r\n",
+                       (unsigned long)test_count,
+                       ret,
+                       chip_id.acc_id,
+                       chip_id.gyro_id);
+        return;
+    }
+
+    BoardLog_Info("[BMI088_TEST] #%lu acc_id=0x%02X gyro_id=0x%02X "
+                  "ax=%d ay=%d az=%d gx=%d gy=%d gz=%d temp=%d tick=%lu\r\n",
+                  (unsigned long)test_count,
+                  chip_id.acc_id,
+                  chip_id.gyro_id,
+                  raw.ax,
+                  raw.ay,
+                  raw.az,
+                  raw.gx,
+                  raw.gy,
+                  raw.gz,
+                  raw.temp,
+                  (unsigned long)raw.tick_ms);
+#endif
+}
+
 static void App_RunMcuInfoEventTest(void)
 {
-#if ENABLE_MCU_INFO_APP_EVENT_TEST
+//#if ENABLE_MCU_INFO_APP_EVENT_TEST
     static uint32_t last_post_ms = 0U;
     static uint32_t event_counter = 0U;
 
@@ -115,7 +180,7 @@ static void App_RunMcuInfoEventTest(void)
                                MCU_INFO_EVENT_APP_MESSAGE,
                                (const uint8_t *)payload,
                                (uint16_t)len);
-#endif
+//#endif
 }
 static void App_TestProtocolFrame(void)
 {
@@ -171,7 +236,7 @@ static void App_ProcessUartRxTest(void)
 
 static void App_ReportUartRxStatsPeriodically(void)
 {
-#if ENABLE_UART_RX_STATS_REPORT
+//#if ENABLE_UART_RX_STATS_REPORT
     static uint32_t last_report_ms = 0U;
     uint32_t now;
     PlatformUartRxSnapshot_t s;
@@ -210,7 +275,7 @@ static void App_ReportUartRxStatsPeriodically(void)
            c->expected_counter,
            c->last_actual,
            c->last_expected);
-#endif
+//#endif
 }
 
 static void AppTest_OnEnterIdle(void *ctx)
@@ -491,7 +556,7 @@ static void App_PrintTickTest(void)
 
 static void App_RunSoftwareResetTest(void)
 {
-#if ENABLE_SOFTWARE_RESET_TEST
+//#if ENABLE_SOFTWARE_RESET_TEST
     if ((PlatformReset_IsSoftwareReset(&g_reset_info) == 0U) &&
         (PlatformTime_GetMs() > SOFTWARE_RESET_DELAY_MS))
     {
@@ -499,12 +564,12 @@ static void App_RunSoftwareResetTest(void)
         PlatformTime_DelayMs(100U);
         PlatformReset_SoftwareReset();
     }
-#endif
+//#endif
 }
 
 static void App_RunHardFaultTest(void)
 {
-#if ENABLE_HARDFAULT_TEST
+//#if ENABLE_HARDFAULT_TEST
     if (PlatformTime_GetMs() > HARDFAULT_TEST_DELAY_MS)
     {
         BoardLog_Info("[FAULT_TEST] Trigger HardFault test\r\n");
@@ -513,7 +578,7 @@ static void App_RunHardFaultTest(void)
         volatile uint32_t *bad_addr = (uint32_t *)0xFFFFFFFFU;
         *bad_addr = 0x12345678U;
     }
-#endif
+//#endif
 }
 static void App_PrintUptimePeriodically(void)
 {
@@ -533,6 +598,19 @@ void App_Init(void)
     PlatformUart_Init();
     PlatformTime_Init();
     BoardLog_Init();
+
+#if ENABLE_BMI088_BSP_TEST
+    PlatformSpi_Init();
+
+    if (BspBmi088_Init() == BSP_BMI088_OK)
+    {
+        BoardLog_Info("BMI088 BSP init OK\r\n");
+    }
+    else
+    {
+        BoardLog_Error("BMI088 BSP init failed\r\n");
+    }
+#endif
 
     BoardLog_PrintBootBanner();
     if (PlatformUart_StartRxDma() == PLATFORM_UART_OK)
@@ -583,7 +661,9 @@ void App_Init(void)
 
     CommandManager_Init();
     ProtocolManager_Init();
+		ImuApp_Init();
 #endif
+		
     printf("========================================\r\n");
 }
 
@@ -592,17 +672,34 @@ void App_Run(void)
 #if ENABLE_UART_RX_SLOW_FAST_TEST
         UartRxConsumer_Run();
 #endif 
+
+#if ENABLE_MCU_INFO_APP_EVENT_TEST
 		App_RunMcuInfoEventTest();
+#endif 
+
 #if ENABLE_PROTOCOL_MANAGER_TEST
+				ImuApp_Run();
         DiagnosticApp_Run();
         McuInfoApp_Run();
         ProtocolManager_Process();
 #endif
-       
-        App_ReportUartRxStatsPeriodically();
 
+#if ENABLE_BMI088_BSP_TEST
+        App_RunBmi088BspTest();
+#endif    
+
+#if ENABLE_UART_RX_STATS_REPORT
+        App_ReportUartRxStatsPeriodically();
+#endif 
+
+#if ENABLE_SOFTWARE_RESET_TEST
         App_RunSoftwareResetTest();
+#endif
+
+#if ENABLE_HARDFAULT_TEST
         App_RunHardFaultTest();
+#endif
 
 		App_PrintUptimePeriodically();
+
 }
