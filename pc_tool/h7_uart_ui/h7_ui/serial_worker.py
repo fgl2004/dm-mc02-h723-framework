@@ -11,7 +11,16 @@ import serial.tools.list_ports
 from PySide6.QtCore import QObject, Signal
 
 from h7_proto.codec import ProtocolStreamParser, build_frame
-from h7_proto.constants import TYPE_EVENT, TYPE_NACK, TYPE_REQ, TYPE_RESP
+from h7_proto.constants import (
+    TYPE_ACK,
+    TYPE_DATA,
+    TYPE_EVENT,
+    TYPE_NACK,
+    TYPE_REQ,
+    TYPE_RESP,
+    
+    TYPE_WINDOW_ACK,
+)
 from h7_proto.frame import ProtoFrame
 
 from .telemetry import parse_uartstat_line
@@ -34,6 +43,9 @@ class SerialWorker(QObject):
     protocol_event = Signal(object)
     protocol_response = Signal(object)
     protocol_nack = Signal(object)
+    protocol_data = Signal(object)
+    protocol_ack = Signal(object)
+    protocol_window_ack = Signal(object)
 
     tx_bytes_written = Signal(int)
     tx_queue_size_changed = Signal(int)
@@ -170,6 +182,15 @@ class SerialWorker(QObject):
         frame = self.send_frame(TYPE_REQ, seq, cmd, payload)
         return seq, frame
 
+    def send_ack(self, seq: int, cmd: int, payload: bytes = b"", flags: int = 0) -> bytes:
+        return self.send_frame(TYPE_ACK, seq, cmd, payload, flags)
+
+    def send_data(self, seq: int, cmd: int, payload: bytes = b"", flags: int = 0) -> bytes:
+        return self.send_frame(TYPE_DATA, seq, cmd, payload, flags)
+
+    def send_window_ack(self, seq: int, cmd: int, payload: bytes = b"", flags: int = 0) -> bytes:
+        return self.send_frame(TYPE_WINDOW_ACK, seq, cmd, payload, flags)
+
     def clear_tx_queue(self) -> None:
         print("[DEBUG] SerialWorker.clear_tx_queue()")
 
@@ -251,6 +272,12 @@ class SerialWorker(QObject):
                 self.protocol_response.emit(frame)
             elif frame.frame_type == TYPE_NACK:
                 self.protocol_nack.emit(frame)
+            elif frame.frame_type == TYPE_DATA:
+                self.protocol_data.emit(frame)
+            elif frame.frame_type == TYPE_ACK:
+                self.protocol_ack.emit(frame)
+            elif frame.frame_type == TYPE_WINDOW_ACK:
+                self.protocol_window_ack.emit(frame)
 
     def _process_text_lines(self, data: bytes) -> None:
         """

@@ -263,6 +263,7 @@ void CommandService_PrintStats(void)
     BoardLog_Info("  security_cmd_count   = %lu\r\n", g_command_service.stats.security_cmd_count);
     BoardLog_Info("  power_cmd_count      = %lu\r\n", g_command_service.stats.power_cmd_count);
     BoardLog_Info("  chaos_cmd_count      = %lu\r\n", g_command_service.stats.chaos_cmd_count);
+    BoardLog_Info("  storage_cmd_count    = %lu\r\n", g_command_service.stats.storage_cmd_count);
     BoardLog_Info("  debug_cmd_count      = %lu\r\n", g_command_service.stats.debug_cmd_count);
     BoardLog_Info("  unknown_cmd_count    = %lu\r\n", g_command_service.stats.unknown_cmd_count);
     BoardLog_Info("  table_full_count     = %lu\r\n", g_command_service.stats.table_full_count);
@@ -374,6 +375,11 @@ uint8_t CommandService_GetCategoryByCmd(uint8_t cmd)
         return CMD_CATEGORY_CHAOS;
     }
 
+    if ((cmd >= CMD_DOMAIN_STORAGE_START) && (cmd <= CMD_DOMAIN_STORAGE_END))
+    {
+        return CMD_CATEGORY_STORAGE;
+    }
+
     if ((cmd >= CMD_DOMAIN_DEBUG_START) && (cmd <= CMD_DOMAIN_DEBUG_END))
     {
         return CMD_CATEGORY_DEBUG;
@@ -412,6 +418,9 @@ const char *CommandService_GetCategoryName(uint8_t category)
 
         case CMD_CATEGORY_CHAOS:
             return "CHAOS";
+
+        case CMD_CATEGORY_STORAGE:
+            return "STORAGE";
 
         case CMD_CATEGORY_DEBUG:
             return "DEBUG";
@@ -474,6 +483,10 @@ static void CommandService_CountCategory(uint8_t category)
 
         case CMD_CATEGORY_CHAOS:
             g_command_service.stats.chaos_cmd_count++;
+            break;
+
+        case CMD_CATEGORY_STORAGE:
+            g_command_service.stats.storage_cmd_count++;
             break;
 
         case CMD_CATEGORY_DEBUG:

@@ -4,9 +4,12 @@ from dataclasses import dataclass
 
 from .constants import (
     FRAME_TYPE_NAME_MAP,
+    TYPE_ACK,
+    TYPE_DATA,
     TYPE_EVENT,
     TYPE_NACK,
     TYPE_RESP,
+    TYPE_WINDOW_ACK,
 )
 
 
@@ -26,6 +29,15 @@ class ProtoFrame:
 
     def is_event(self) -> bool:
         return self.frame_type == TYPE_EVENT
+
+    def is_data(self) -> bool:
+        return self.frame_type == TYPE_DATA
+
+    def is_ack(self) -> bool:
+        return self.frame_type == TYPE_ACK
+
+    def is_window_ack(self) -> bool:
+        return self.frame_type == TYPE_WINDOW_ACK
 
     def is_response_for(self, seq: int, cmd: int) -> bool:
         return (

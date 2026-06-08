@@ -17,7 +17,7 @@ extern "C" {
  * Design:
  *   BMI088 BSP       -> raw sensor access
  *   AttitudeEstimator -> 6-axis complementary filter
- *   ImuApp           -> state machine, sampling, command handlers, event output
+ *   ImuApp           -> state machine, sampling, command handlers, StreamManager output
  */
 
 #ifndef IMU_APP_SAMPLE_PERIOD_MS
@@ -214,6 +214,10 @@ void ImuApp_Run(void);
 
 int ImuApp_Start(void);
 int ImuApp_Stop(void);
+int ImuApp_StartStream(void);
+int ImuApp_StopStream(void);
+
+/* Backward-compatible names. The implementation now uses StreamManager. */
 int ImuApp_StartEventStream(void);
 int ImuApp_StopEventStream(void);
 int ImuApp_SetSamplePeriodMs(uint32_t period_ms);

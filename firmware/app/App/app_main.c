@@ -20,6 +20,13 @@
 #include "bsp_bmi088.h"
 #include "imu_app.h"
 
+#include "platform_qspi.h"
+#include "bsp_w25q64jv.h"
+#include "flash_block_device.h"
+#include "storage_partition.h"
+#include "storage_manager.h"
+
+
 #include <stdio.h>
 
 #define ENABLE_SOFTWARE_RESET_TEST   0
@@ -46,7 +53,7 @@
 
 #define ENABLE_PROTOCOL_FRAME_TEST     0
 
-#define ENABLE_PROTOCOL_MANAGER_TEST     1
+#define ENABLE_PROTOCOL_MANAGER_TEST     0
 
 #define ENABLE_MCU_INFO_APP_EVENT_TEST     0
 #define MCU_INFO_APP_EVENT_TEST_PERIOD_MS         500U
@@ -55,6 +62,48 @@
 #define ENABLE_BMI088_BSP_TEST           0
 #define BMI088_BSP_TEST_PERIOD_MS        500U
 
+
+#ifndef ENABLE_W25Q64_TEST
+#define ENABLE_W25Q64_TEST          0
+#endif
+
+#ifndef W25Q64_TEST_PERIOD_MS
+#define W25Q64_TEST_PERIOD_MS        2000U
+#endif
+
+#ifndef W25Q64_TEST_ADDR
+#define W25Q64_TEST_ADDR             0x7F0000U
+#endif
+
+#ifndef ENABLE_FLASH_BLOCK_DEVICE_TEST
+#define ENABLE_FLASH_BLOCK_DEVICE_TEST     0
+#endif
+
+#ifndef ENABLE_STORAGE_PARTITION_TEST
+#define ENABLE_STORAGE_PARTITION_TEST      0
+#endif
+
+#ifndef FLASH_BLOCK_DEVICE_TEST_PERIOD_MS
+#define FLASH_BLOCK_DEVICE_TEST_PERIOD_MS  3000U
+#endif
+
+#ifndef FLASH_BLOCK_DEVICE_TEST_LEN
+#define FLASH_BLOCK_DEVICE_TEST_LEN        300U
+#endif
+
+#ifndef ENABLE_STORAGE_MANAGER_TEST
+#define ENABLE_STORAGE_MANAGER_TEST     0
+#endif
+
+#ifndef STORAGE_MANAGER_TEST_PERIOD_MS
+#define STORAGE_MANAGER_TEST_PERIOD_MS   4000U
+#endif
+
+#ifndef STORAGE_MANAGER_TEST_LEN
+#define STORAGE_MANAGER_TEST_LEN         300U
+#endif
+
+#define ENABLE_UART1_DMA_TEST   1
 
 static PlatformResetInfo_t g_reset_info;
 
@@ -82,6 +131,323 @@ typedef struct
 
 static AppTestStateMachineCtx_t g_sm_test_ctx;
 
+static void AppMain_TestUart1TxDma(void)
+{
+    static uint8_t done = 0U;
+    static uint8_t tx_data[256];
+
+    uint32_t start;
+    uint32_t elapsed_us;
+    int ret;
+
+    if (done != 0U)
+    {
+        return;
+    }
+
+    done = 1U;
+
+    for (uint16_t i = 0U; i < sizeof(tx_data); i++)
+    {
+        tx_data[i] = (uint8_t)i;
+    }
+
+    /*
+     * 注意：
+     * BoardLog / printf 目前仍然走 UART1 阻塞发送。
+     * 所以必须在 DMA 开始前打印 start，在 DMA 完成后再打印结果。
+     */
+    BoardLog_Info("[UART1_TX_DMA_TEST] start, len=%u\r\n", (unsigned int)sizeof(tx_data));
+
+    PlatformTime_DelayMs(20U);
+
+    start = PlatformTime_ProfileStart();
+
+    ret = PlatformUart_SendBufferDma(tx_data, (uint16_t)sizeof(tx_data));
+    if (ret != PLATFORM_UART_OK)
+    {
+        BoardLog_Error("[UART1_TX_DMA_TEST] start failed, ret=%d\r\n", ret);
+        PlatformUart_PrintStats();
+        return;
+    }
+
+    while (PlatformUart_IsTxBusy() != 0U)
+    {
+        PlatformTime_DelayMs(1U);
+    }
+
+    elapsed_us = PlatformTime_ProfileEndUs(start);
+
+    BoardLog_Info("[UART1_TX_DMA_TEST] done, elapsed=%lu us\r\n",
+                  (unsigned long)elapsed_us);
+
+    PlatformUart_PrintStats();
+}
+
+static void App_RunStorageManagerTest(void)
+{
+#if ENABLE_STORAGE_MANAGER_TEST
+    static uint8_t first_run = 1U;
+    static uint32_t last_test_ms = 0U;
+    static uint32_t test_count = 0U;
+
+    const StoragePartition_t *partition;
+    uint32_t now;
+    uint32_t test_offset;
+    int ret;
+
+    now = PlatformTime_GetMs();
+
+    if ((first_run == 0U) && ((now - last_test_ms) < STORAGE_MANAGER_TEST_PERIOD_MS))
+    {
+        return;
+    }
+
+    first_run = 0U;
+    last_test_ms = now;
+    test_count++;
+
+    partition = StoragePartition_Get(STORAGE_PARTITION_FACTORY_RESERVED);
+    if (partition == 0)
+    {
+        BoardLog_Error("[STORAGE_MANAGER_TEST] factory partition missing\r\n");
+        return;
+    }
+
+    /*
+     * Test the last sector inside factory_reserved partition.
+     */
+    test_offset = partition->size_bytes - partition->erase_size;
+
+    if (test_count == 1U)
+    {
+        ret = StorageManager_TestPartition(STORAGE_PARTITION_FACTORY_RESERVED,
+                                           test_offset,
+                                           STORAGE_MANAGER_TEST_LEN);
+        if (ret == STORAGE_MANAGER_OK)
+        {
+            BoardLog_Info("[STORAGE_MANAGER_TEST] first test PASS\r\n");
+        }
+        else
+        {
+            BoardLog_Error("[STORAGE_MANAGER_TEST] first test FAIL, ret=%d\r\n", ret);
+        }
+
+        StorageManager_PrintInfo();
+        StorageManager_PrintStats();
+        FlashBlockDevice_PrintStats();
+    }
+    else
+    {
+        const StorageManagerStats_t *stats = StorageManager_GetStats();
+
+        BoardLog_Info("[STORAGE_MANAGER_TEST] #%lu last_error=%d read=%lu write=%lu erase=%lu test=%lu\r\n",
+                      (unsigned long)test_count,
+                      stats->last_error,
+                      (unsigned long)stats->read_count,
+                      (unsigned long)stats->write_count,
+                      (unsigned long)stats->erase_count,
+                      (unsigned long)stats->test_count);
+    }
+#endif
+}
+static void App_RunStoragePartitionTest(void)
+{
+#if ENABLE_STORAGE_PARTITION_TEST
+    static uint8_t done = 0U;
+    uint32_t i;
+
+    if (done != 0U)
+    {
+        return;
+    }
+
+    done = 1U;
+
+    StoragePartition_PrintTable();
+
+    for (i = 0U; i < StoragePartition_GetCount(); i++)
+    {
+        const StoragePartition_t *p = StoragePartition_Get((StoragePartitionId_t)i);
+
+        if (StoragePartition_IsValid(p) == 0)
+        {
+            BoardLog_Error("[STORAGE_PARTITION_TEST] partition %lu invalid\r\n",
+                           (unsigned long)i);
+        }
+        else
+        {
+            BoardLog_Info("[STORAGE_PARTITION_TEST] partition %lu OK: %s start=0x%06lX size=%lu\r\n",
+                          (unsigned long)i,
+                          p->name,
+                          (unsigned long)p->start_addr,
+                          (unsigned long)p->size_bytes);
+        }
+    }
+#endif
+}
+
+static void App_RunFlashBlockDeviceTest(void)
+{
+#if ENABLE_FLASH_BLOCK_DEVICE_TEST
+    static uint8_t first_run = 1U;
+    static uint32_t last_test_ms = 0U;
+    static uint32_t test_count = 0U;
+
+    const StoragePartition_t *factory_partition;
+    uint32_t now;
+    uint32_t test_addr;
+    int ret;
+
+    now = PlatformTime_GetMs();
+
+    if ((first_run == 0U) && ((now - last_test_ms) < FLASH_BLOCK_DEVICE_TEST_PERIOD_MS))
+    {
+        return;
+    }
+
+    first_run = 0U;
+    last_test_ms = now;
+    test_count++;
+
+    factory_partition = StoragePartition_Get(STORAGE_PARTITION_FACTORY_RESERVED);
+    if (factory_partition == 0)
+    {
+        BoardLog_Error("[FLASH_BLOCK_TEST] factory partition missing\r\n");
+        return;
+    }
+
+    /*
+     * Use the last 4KB sector in factory/reserved partition as temporary test sector.
+     * Do not keep this enabled after real factory data is introduced.
+     */
+    test_addr = factory_partition->start_addr + factory_partition->size_bytes - factory_partition->erase_size;
+
+    if (test_count == 1U)
+    {
+        ret = FlashBlockDevice_WriteReadTest(test_addr, FLASH_BLOCK_DEVICE_TEST_LEN);
+        if (ret == FLASH_BLOCK_DEVICE_OK)
+        {
+            BoardLog_Info("[FLASH_BLOCK_TEST] write/read PASS addr=0x%06lX len=%lu\r\n",
+                          (unsigned long)test_addr,
+                          (unsigned long)FLASH_BLOCK_DEVICE_TEST_LEN);
+        }
+        else
+        {
+            BoardLog_Error("[FLASH_BLOCK_TEST] write/read FAIL ret=%d addr=0x%06lX len=%lu\r\n",
+                           ret,
+                           (unsigned long)test_addr,
+                           (unsigned long)FLASH_BLOCK_DEVICE_TEST_LEN);
+        }
+
+        FlashBlockDevice_PrintStats();
+    }
+    else
+    {
+        const FlashBlockDeviceStats_t *stats = FlashBlockDevice_GetStats();
+        const FlashBlockDeviceInfo_t *info = FlashBlockDevice_GetInfo();
+
+        BoardLog_Info("[FLASH_BLOCK_TEST] #%lu capacity=%lu erase=%lu program=%lu last_error=%d read=%lu program=%lu erase=%lu\r\n",
+                      (unsigned long)test_count,
+                      (unsigned long)info->capacity_bytes,
+                      (unsigned long)info->erase_size,
+                      (unsigned long)info->program_size,
+                      stats->last_error,
+                      (unsigned long)stats->read_count,
+                      (unsigned long)stats->program_count,
+                      (unsigned long)stats->erase_count);
+    }
+#endif
+}
+
+static void App_RunW25q64Test(void)
+{
+//#if ENABLE_W25Q64_TEST
+    static uint8_t first_run = 1U;
+    static uint32_t last_test_ms = 0U;
+    static uint32_t test_count = 0U;
+
+    uint32_t now;
+    BspW25q64JedecId_t jedec;
+    BspW25q64UniqueId_t uid;
+    uint8_t sr1 = 0U;
+    uint8_t sr2 = 0U;
+    uint8_t sr3 = 0U;
+    int ret;
+
+    now = PlatformTime_GetMs();
+
+    if ((first_run == 0U) && ((now - last_test_ms) < W25Q64_TEST_PERIOD_MS))
+    {
+        return;
+    }
+
+    first_run = 0U;
+    last_test_ms = now;
+    test_count++;
+
+    ret = BspW25q64_ReadJedecId(&jedec);
+    if (ret != BSP_W25Q64_OK)
+    {
+        BoardLog_Error("[W25Q64_TEST] #%lu ReadJedecId failed, ret=%d\r\n",
+                       (unsigned long)test_count,
+                       ret);
+        return;
+    }
+
+    ret = BspW25q64_ReadUniqueId(&uid);
+    if (ret != BSP_W25Q64_OK)
+    {
+        BoardLog_Error("[W25Q64_TEST] #%lu ReadUniqueId failed, ret=%d\r\n",
+                       (unsigned long)test_count,
+                       ret);
+        return;
+    }
+
+    (void)BspW25q64_ReadStatus1(&sr1);
+    (void)BspW25q64_ReadStatus2(&sr2);
+    (void)BspW25q64_ReadStatus3(&sr3);
+
+    BoardLog_Info("[W25Q64_TEST] #%lu JEDEC=%02X %02X %02X UID=%02X%02X%02X%02X%02X%02X%02X%02X SR=%02X/%02X/%02X\r\n",
+                  (unsigned long)test_count,
+                  jedec.manufacturer_id,
+                  jedec.memory_type,
+                  jedec.capacity_id,
+                  uid.bytes[0],
+                  uid.bytes[1],
+                  uid.bytes[2],
+                  uid.bytes[3],
+                  uid.bytes[4],
+                  uid.bytes[5],
+                  uid.bytes[6],
+                  uid.bytes[7],
+                  sr1,
+                  sr2,
+                  sr3);
+
+    /*
+     * Only run erase/program/readback once to avoid unnecessary flash wear.
+     */
+    if (test_count == 1U)
+    {
+        ret = BspW25q64_WriteReadTest(W25Q64_TEST_ADDR);
+        if (ret == BSP_W25Q64_OK)
+        {
+            BoardLog_Info("[W25Q64_TEST] write/read test PASS, addr=0x%06lX\r\n",
+                          (unsigned long)W25Q64_TEST_ADDR);
+        }
+        else
+        {
+            BoardLog_Error("[W25Q64_TEST] write/read test FAIL, ret=%d, addr=0x%06lX\r\n",
+                           ret,
+                           (unsigned long)W25Q64_TEST_ADDR);
+        }
+
+        BspW25q64_PrintStats();
+        PlatformQspi_PrintStats();
+    }
+//#endif
+}
 static void App_RunBmi088BspTest(void)
 {
 #if ENABLE_BMI088_BSP_TEST
@@ -626,6 +992,42 @@ void App_Init(void)
     PlatformReset_Capture(&g_reset_info);
     PlatformReset_PrintInfo(&g_reset_info);
     PlatformReset_ClearFlags();
+#if ENABLE_W25Q64_TEST
+    PlatformQspi_Init();
+
+    if (BspW25q64_Init() == BSP_W25Q64_OK)
+    {
+        BoardLog_Info("W25Q64 BSP init OK\r\n");
+    }
+    else
+    {
+        BoardLog_Error("W25Q64 BSP init failed\r\n");
+    }
+#endif
+#if ENABLE_FLASH_BLOCK_DEVICE_TEST
+		PlatformQspi_Init();
+    if (FlashBlockDevice_Init() == FLASH_BLOCK_DEVICE_OK)
+    {
+        BoardLog_Info("FlashBlockDevice init OK\r\n");
+    }
+    else
+    {
+        BoardLog_Error("FlashBlockDevice init failed\r\n");
+    }
+#endif
+
+#if ENABLE_STORAGE_MANAGER_TEST
+		PlatformQspi_Init();
+    if (StorageManager_Init() == STORAGE_MANAGER_OK)
+    {
+        BoardLog_Info("StorageManager init OK\r\n");
+    }
+    else
+    {
+        BoardLog_Error("StorageManager init failed\r\n");
+    }
+#endif
+
 #if ENABLE_UART_RX_SLOW_FAST_TEST
     UartRxConsumer_Init();
 #endif
@@ -699,7 +1101,25 @@ void App_Run(void)
 #if ENABLE_HARDFAULT_TEST
         App_RunHardFaultTest();
 #endif
+#if ENABLE_W25Q64_TEST
+        //App_RunW25q64Test();
+#endif
 
+#if ENABLE_STORAGE_PARTITION_TEST
+    App_RunStoragePartitionTest();
+#endif
+
+#if ENABLE_FLASH_BLOCK_DEVICE_TEST
+    App_RunFlashBlockDeviceTest();
+#endif
+#if ENABLE_STORAGE_MANAGER_TEST
+    App_RunStorageManagerTest();
+#endif
+
+
+#if ENABLE_UART1_DMA_TEST
+    AppMain_TestUart1TxDma();
+#endif
 		App_PrintUptimePeriodically();
 
 }

@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "dma.h"
+#include "octospi.h"
 #include "spi.h"
 #include "usart.h"
 #include "gpio.h"
@@ -27,7 +28,7 @@
 /* USER CODE BEGIN Includes */
 
 #include "app_main.h"
-
+#include "app_test.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -99,16 +100,19 @@ int main(void)
   MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_SPI2_Init();
+  MX_OCTOSPI1_Init();
   /* USER CODE BEGIN 2 */
 /* USER CODE BEGIN 2 */
-  App_Init();
+ // App_Init();
+	AppTestStreamBlock_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-     App_Run();
+     //App_Run();
+  AppTestStreamBlock_Run();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

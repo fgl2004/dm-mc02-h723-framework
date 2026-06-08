@@ -2,6 +2,7 @@
 
 #include "mcu_info_app.h"
 #include "command_service.h"
+#include "stream_manager.h"
 #include "platform_time.h"
 #include "board_log.h"
 
@@ -10,6 +11,7 @@
 
 #define IMU_APP_RESP_BUF_SIZE                160U
 #define IMU_APP_EVENT_BUF_SIZE               64U
+#define IMU_APP_STREAM_BUF_SIZE              96U
 
 /*
  * Current BMI088 BSP configuration:
@@ -55,6 +57,7 @@ static void ImuApp_ConvertRawToScaled(const BspBmi088RawData_t *raw, ImuScaledSa
 static void ImuApp_UpdateAttitudeCache(void);
 static void ImuApp_PostSimpleEvent(uint8_t event_id, const char *payload);
 static void ImuApp_PostAttitudeEvent(void);
+static void ImuApp_SendAttitudeStream(void);
 static int ImuApp_ParseUint32Payload(const ProtocolFrame_t *req, uint32_t *value);
 static int32_t ImuApp_FloatToCenti(float value);
 static int32_t ImuApp_FloatToMilli(float value);
@@ -197,7 +200,7 @@ void ImuApp_Run(void)
             ((now - g_imu_app.last_event_tick_ms) >= g_imu_app.event_period_ms))
         {
             g_imu_app.last_event_tick_ms = now;
-            ImuApp_PostAttitudeEvent();
+            ImuApp_SendAttitudeStream();
         }
     }
 
@@ -266,21 +269,39 @@ int ImuApp_Stop(void)
     return IMU_APP_OK;
 }
 
-int ImuApp_StartEventStream(void)
+int ImuApp_StartStream(void)
 {
+    int ret;
+
     if (g_imu_app.initialized == 0U)
     {
         return IMU_APP_NOT_INITIALIZED;
+    }
+
+    /*
+     * Stream output is now routed through StreamManager as TYPE=DATA/CMD=0x70.
+     * If the app is not sampling yet, START_STREAM should also start the IMU
+     * state machine so the PC can recover the whole function with one button.
+     */
+    if (g_imu_app.started == 0U)
+    {
+        ret = ImuApp_Start();
+        if (ret != IMU_APP_OK)
+        {
+            return ret;
+        }
     }
 
     g_imu_app.event_stream_enabled = 1U;
     g_imu_app.last_event_tick_ms = PlatformTime_GetMs();
     g_imu_app.stats.event_stream_start_count++;
 
+    ImuApp_SetLastError((uint8_t)IMU_APP_OK);
+
     return IMU_APP_OK;
 }
 
-int ImuApp_StopEventStream(void)
+int ImuApp_StopStream(void)
 {
     if (g_imu_app.initialized == 0U)
     {
@@ -290,7 +311,27 @@ int ImuApp_StopEventStream(void)
     g_imu_app.event_stream_enabled = 0U;
     g_imu_app.stats.event_stream_stop_count++;
 
+    ImuApp_SetLastError((uint8_t)IMU_APP_OK);
+
     return IMU_APP_OK;
+}
+
+int ImuApp_StartEventStream(void)
+{
+    /*
+     * Backward-compatible API name.
+     * New implementation sends stream samples through StreamManager.
+     */
+    return ImuApp_StartStream();
+}
+
+int ImuApp_StopEventStream(void)
+{
+    /*
+     * Backward-compatible API name.
+     * New implementation sends stream samples through StreamManager.
+     */
+    return ImuApp_StopStream();
 }
 
 int ImuApp_SetSamplePeriodMs(uint32_t period_ms)
@@ -544,6 +585,56 @@ static void ImuApp_PostAttitudeEvent(void)
                              IMU_EVENT_ATTITUDE,
                              (const uint8_t *)payload,
                              (uint16_t)len) == MCU_INFO_APP_OK)
+    {
+        g_imu_app.stats.event_stream_send_count++;
+        g_imu_app.stats.last_event = IMU_EVENT_ATTITUDE;
+    }
+    else
+    {
+        g_imu_app.stats.event_stream_drop_count++;
+    }
+}
+
+
+static void ImuApp_SendAttitudeStream(void)
+{
+    char payload[IMU_APP_STREAM_BUF_SIZE];
+    int len;
+
+    ImuApp_UpdateAttitudeCache();
+
+    /*
+     * PC StreamClient decodes StreamManager payload and MainWindow then tries
+     * to parse the sample as ASCII key-value text.
+     *
+     * Keep this payload short and stable:
+     *   t = sensor timestamp ms
+     *   r/p/y = roll/pitch/yaw in centi-degrees
+     */
+    len = snprintf(payload,
+                   sizeof(payload),
+                   "t=%lu,r=%ld,p=%ld,y=%ld",
+                   (unsigned long)g_imu_app.attitude.tick_ms,
+                   (long)ImuApp_FloatToCenti(g_imu_app.attitude.roll_deg),
+                   (long)ImuApp_FloatToCenti(g_imu_app.attitude.pitch_deg),
+                   (long)ImuApp_FloatToCenti(g_imu_app.attitude.yaw_deg));
+
+    if (len < 0)
+    {
+        g_imu_app.stats.event_stream_drop_count++;
+        return;
+    }
+
+    if (len >= (int)sizeof(payload))
+    {
+        len = (int)(sizeof(payload) - 1);
+        payload[len] = '\0';
+    }
+
+    if (StreamManager_SendSample(STREAM_MANAGER_CHANNEL_IMU,
+                                 (const uint8_t *)payload,
+                                 (uint16_t)len,
+                                 PROTOCOL_TX_PRIORITY_LOW) == STREAM_MANAGER_OK)
     {
         g_imu_app.stats.event_stream_send_count++;
         g_imu_app.stats.last_event = IMU_EVENT_ATTITUDE;
@@ -1165,7 +1256,11 @@ static int ImuApp_HandleStartStream(const ProtocolFrame_t *req, CommandManagerRe
         return COMMAND_SERVICE_INVALID_PARAM;
     }
 
-    (void)ImuApp_StartEventStream();
+    if (ImuApp_StartStream() != IMU_APP_OK)
+    {
+        CommandService_SetNack(resp, req->cmd, PROTO_ERROR_INVALID_STATE);
+        return COMMAND_SERVICE_ERROR;
+    }
 
     CommandService_SetResp(resp, req->cmd, (const uint8_t *)text, (uint16_t)strlen(text));
 
@@ -1183,7 +1278,11 @@ static int ImuApp_HandleStopStream(const ProtocolFrame_t *req, CommandManagerRes
         return COMMAND_SERVICE_INVALID_PARAM;
     }
 
-    (void)ImuApp_StopEventStream();
+    if (ImuApp_StopStream() != IMU_APP_OK)
+    {
+        CommandService_SetNack(resp, req->cmd, PROTO_ERROR_INVALID_STATE);
+        return COMMAND_SERVICE_ERROR;
+    }
 
     CommandService_SetResp(resp, req->cmd, (const uint8_t *)text, (uint16_t)strlen(text));
 

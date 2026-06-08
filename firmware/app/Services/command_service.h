@@ -52,6 +52,9 @@ typedef enum
     CMD_DOMAIN_CHAOS_START       = 0x90U,
     CMD_DOMAIN_CHAOS_END         = 0x9FU,
 
+    CMD_DOMAIN_STORAGE_START     = 0xA0U,
+    CMD_DOMAIN_STORAGE_END       = 0xAFU,
+
     CMD_DOMAIN_DEBUG_START       = 0xF0U,
     CMD_DOMAIN_DEBUG_END         = 0xFFU
 } CommandDomainRange_t;
@@ -67,6 +70,7 @@ typedef enum
     CMD_CATEGORY_SECURITY    = 0x07U,
     CMD_CATEGORY_POWER       = 0x08U,
     CMD_CATEGORY_CHAOS       = 0x09U,
+    CMD_CATEGORY_STORAGE     = 0x0AU,
     CMD_CATEGORY_DEBUG       = 0x0FU
 } CommandCategory_t;
 
@@ -206,6 +210,7 @@ typedef enum
     CHAOS_CMD_GET_REPORT         = 0x97U
 } ChaosCommandId_t;
 
+
 typedef enum
 {
     COMMAND_SERVICE_OK = 0,
@@ -248,6 +253,7 @@ typedef struct
     uint32_t security_cmd_count;
     uint32_t power_cmd_count;
     uint32_t chaos_cmd_count;
+    uint32_t storage_cmd_count;
     uint32_t debug_cmd_count;
 
     uint32_t unknown_cmd_count;

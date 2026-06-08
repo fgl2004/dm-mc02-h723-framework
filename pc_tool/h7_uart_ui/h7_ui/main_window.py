@@ -59,17 +59,28 @@ from h7_proto.constants import (
     IMU_CMD_STOP,
     IMU_CMD_GET_ATTITUDE,
     IMU_CMD_CLEAR_STATS,
+    STREAM_MANAGER_DATA_CMD,
+    BLOCK_MANAGER_DATA_CMD,
+    STREAM_CHANNEL_IMU,
+    TYPE_DATA,
+    TYPE_ACK,
+    TYPE_WINDOW_ACK,
+    block_op_name,
+    stream_channel_name,
     event_name,
     error_name,
 )
 from h7_proto.event import decode_mcu_info_event, event_summary
 from h7_proto.frame import ProtoFrame
+from h7_proto.stream_client import StreamClient, StreamSample, stream_sample_summary
+from h7_proto.block_client import BlockClient, block_packet_summary
 
 from .patterns import AVAILABLE_PATTERNS, make_pattern
 from .serial_worker import SerialWorker, list_serial_ports
 from .telemetry import UartStat
 from .ring_buffer_widget import RingBufferWidget
 from .imu_3d_widget import Imu3DWidget
+from .storage_tab import StorageTab
 
 
 
@@ -83,6 +94,12 @@ class MainWindow(QMainWindow):
         self.resize(1500, 940)
 
         self.serial_worker = SerialWorker()
+
+        # Protocol semantic clients.
+        # SerialWorker owns transport + byte stream parsing.
+        # MainWindow owns UI routing for command/event/stream/block frames.
+        self.stream_client = StreamClient()
+        self.block_client = BlockClient()
 
         self.stats_history_len = 300
         self.time_data = deque(maxlen=self.stats_history_len)
@@ -128,6 +145,12 @@ class MainWindow(QMainWindow):
         self.protocol_resp_count = 0
         self.protocol_nack_count = 0
         self.protocol_event_count = 0
+        self.protocol_data_count = 0
+        self.protocol_ack_count = 0
+        self.protocol_window_ack_count = 0
+        self.protocol_stream_count = 0
+        self.protocol_block_count = 0
+        self.protocol_unknown_data_count = 0
         self.protocol_tx_req_count = 0
         self.protocol_last_seq = 0
         self.protocol_auto_poll_index = 0
@@ -172,6 +195,8 @@ class MainWindow(QMainWindow):
         self.main_tabs = QTabWidget()
         self.main_tabs.addTab(self._build_protocol_diagnostic_tab(), "Protocol / Diagnostic")
         self.main_tabs.addTab(self._build_imu_tab(), "IMU Dashboard")
+        self.storage_tab = StorageTab(self.serial_worker)
+        self.main_tabs.addTab(self.storage_tab, "Storage Explorer")
         layout.addWidget(self.main_tabs, stretch=1)
 
         self.setCentralWidget(root)
@@ -301,13 +326,19 @@ class MainWindow(QMainWindow):
             "resp",
             "nack",
             "event",
+            "data",
+            "ack",
+            "win_ack",
+            "stream",
+            "block",
+            "unknown_data",
             "tx_req",
             "last_seq",
         ]
 
         for idx, name in enumerate(names):
-            row = idx // 3
-            col = (idx % 3) * 2
+            row = idx // 4
+            col = (idx % 4) * 2
 
             stats_layout.addWidget(QLabel(name + ":"), row, col)
 
@@ -706,6 +737,9 @@ class MainWindow(QMainWindow):
         self.serial_worker.protocol_event.connect(self._on_protocol_event)
         self.serial_worker.protocol_response.connect(self._on_protocol_response)
         self.serial_worker.protocol_nack.connect(self._on_protocol_nack)
+        self.serial_worker.protocol_data.connect(self._on_protocol_data)
+        self.serial_worker.protocol_ack.connect(self._on_protocol_ack)
+        self.serial_worker.protocol_window_ack.connect(self._on_protocol_window_ack)
         self.serial_worker.tx_bytes_written.connect(self._on_tx_bytes_written)
         self.serial_worker.tx_queue_size_changed.connect(self._on_tx_queue_size_changed)
 
@@ -922,6 +956,8 @@ class MainWindow(QMainWindow):
         )
 
         self._handle_imu_response(frame)
+        if hasattr(self, "storage_tab"):
+            self.storage_tab.handle_response(frame)
 
     def _on_protocol_nack(self, frame: ProtoFrame) -> None:
         self.protocol_nack_count += 1
@@ -947,16 +983,165 @@ class MainWindow(QMainWindow):
 
         self._handle_imu_event(event)
 
+    def _on_protocol_data(self, frame: ProtoFrame) -> None:
+        self.protocol_data_count += 1
+
+        if frame.cmd == STREAM_MANAGER_DATA_CMD:
+            sample = self.stream_client.handle_frame(frame)
+            if sample is None:
+                self.protocol_unknown_data_count += 1
+                self._append_protocol_log(
+                    f"[DATA][STREAM][BAD] seq={frame.seq}, len={len(frame.payload)}, raw={frame.payload_hex()}"
+                )
+            else:
+                self.protocol_stream_count += 1
+                self._handle_stream_sample(sample)
+
+        elif frame.cmd == BLOCK_MANAGER_DATA_CMD:
+            packet = self.block_client.handle_frame(frame)
+            if packet is None:
+                self.protocol_unknown_data_count += 1
+                self._append_protocol_log(
+                    f"[DATA][BLOCK][BAD] seq={frame.seq}, len={len(frame.payload)}, raw={frame.payload_hex()}"
+                )
+            else:
+                self.protocol_block_count += 1
+                self._append_protocol_log(
+                    f"[DATA][BLOCK] {block_packet_summary(packet)}"
+                )
+                if hasattr(self, "storage_tab"):
+                    self.storage_tab.handle_block_packet(packet)
+
+        else:
+            self.protocol_unknown_data_count += 1
+            self._append_protocol_log(
+                f"[DATA][UNKNOWN] seq={frame.seq}, cmd=0x{frame.cmd:02X}, "
+                f"flags=0x{frame.flags:02X}, len={len(frame.payload)}, raw={frame.payload_hex()}"
+            )
+
+        self._update_protocol_labels()
+
+    def _on_protocol_ack(self, frame: ProtoFrame) -> None:
+        self.protocol_ack_count += 1
+
+        if frame.cmd == BLOCK_MANAGER_DATA_CMD:
+            packet = self.block_client.handle_frame(frame)
+            if packet is not None:
+                self.protocol_block_count += 1
+                self._append_protocol_log(
+                    f"[ACK][BLOCK] {block_packet_summary(packet)}"
+                )
+                if hasattr(self, "storage_tab"):
+                    self.storage_tab.handle_block_packet(packet)
+            else:
+                self.protocol_unknown_data_count += 1
+                self._append_protocol_log(
+                    f"[ACK][BLOCK][BAD] seq={frame.seq}, len={len(frame.payload)}, raw={frame.payload_hex()}"
+                )
+        else:
+            self._append_protocol_log(
+                f"[ACK] seq={frame.seq}, cmd=0x{frame.cmd:02X}, "
+                f"len={len(frame.payload)}, raw={frame.payload_hex()}"
+            )
+
+        self._update_protocol_labels()
+
+    def _on_protocol_window_ack(self, frame: ProtoFrame) -> None:
+        self.protocol_window_ack_count += 1
+
+        if frame.cmd == BLOCK_MANAGER_DATA_CMD:
+            packet = self.block_client.handle_frame(frame)
+            if packet is not None:
+                self.protocol_block_count += 1
+                self._append_protocol_log(
+                    f"[WINDOW_ACK][BLOCK] {block_packet_summary(packet)}"
+                )
+                if hasattr(self, "storage_tab"):
+                    self.storage_tab.handle_block_packet(packet)
+            else:
+                self._append_protocol_log(
+                    f"[WINDOW_ACK][BLOCK] seq={frame.seq}, len={len(frame.payload)}, raw={frame.payload_hex()}"
+                )
+        else:
+            self._append_protocol_log(
+                f"[WINDOW_ACK] seq={frame.seq}, cmd=0x{frame.cmd:02X}, "
+                f"len={len(frame.payload)}, raw={frame.payload_hex()}"
+            )
+
+        self._update_protocol_labels()
+
+    def _handle_stream_sample(self, sample: StreamSample) -> None:
+        """
+        Main path for MCU -> PC stream DATA.
+
+        Most stream samples should not flood the text widget. We update counters
+        and IMU dashboard every sample, but only log the first few and then
+        periodic samples.
+        """
+        if sample.channel_id == STREAM_CHANNEL_IMU:
+            self._handle_imu_stream_sample(sample)
+
+        if self.protocol_stream_count <= 5 or (self.protocol_stream_count % 50) == 0:
+            self._append_protocol_log(
+                f"[DATA][STREAM] {stream_sample_summary(sample)}; {self.stream_client.summary()}"
+            )
+
+    def _handle_imu_stream_sample(self, sample: StreamSample) -> None:
+        """
+        Compatible with two stream payload styles:
+          1. ASCII key-value sample, e.g. b"r=123,p=456,y=789,t=1000"
+          2. Binary/raw sample: only counters/tick are updated here.
+        """
+        text = sample.sample_ascii()
+        data = self._parse_kv_payload(text)
+
+        self._set_imu_value("stream", "1")
+        self._set_imu_value("sample", sample.seq)
+        self._set_imu_value("tick", sample.timestamp_ms)
+
+        if data:
+            # Event-style attitude payload: r/p/y in centi-degrees.
+            if ("r" in data) or ("p" in data) or ("y" in data):
+                self._update_imu_attitude_from_event(data, sample.timestamp_ms)
+
+            # Response-style attitude payload: roll_cdeg/pitch_cdeg/yaw_cdeg.
+            elif ("roll_cdeg" in data) or ("pitch_cdeg" in data) or ("yaw_cdeg" in data):
+                self._update_imu_attitude_from_response(data)
+
+            # Raw sample payload.
+            elif any(key in data for key in ["ax", "ay", "az", "gx", "gy", "gz"]):
+                self._update_imu_raw(data, source="STREAM")
+
+            if self.protocol_stream_count <= 5 or (self.protocol_stream_count % 50) == 0:
+                self._append_imu_log(
+                    f"[STREAM] channel={sample.channel_name()}, seq={sample.seq}, "
+                    f"tick={sample.timestamp_ms}, data=[{text}]"
+                )
+        else:
+            if self.protocol_stream_count <= 5 or (self.protocol_stream_count % 50) == 0:
+                self._append_imu_log(
+                    f"[STREAM] channel={sample.channel_name()}, seq={sample.seq}, "
+                    f"tick={sample.timestamp_ms}, len={sample.sample_len}, raw={sample.sample_hex()}"
+                )
+
     def _update_protocol_labels(self) -> None:
         self.protocol_labels["frames"].setText(str(self.protocol_frame_count))
         self.protocol_labels["resp"].setText(str(self.protocol_resp_count))
         self.protocol_labels["nack"].setText(str(self.protocol_nack_count))
         self.protocol_labels["event"].setText(str(self.protocol_event_count))
+        self.protocol_labels["data"].setText(str(self.protocol_data_count))
+        self.protocol_labels["ack"].setText(str(self.protocol_ack_count))
+        self.protocol_labels["win_ack"].setText(str(self.protocol_window_ack_count))
+        self.protocol_labels["stream"].setText(str(self.protocol_stream_count))
+        self.protocol_labels["block"].setText(str(self.protocol_block_count))
+        self.protocol_labels["unknown_data"].setText(str(self.protocol_unknown_data_count))
         self.protocol_labels["tx_req"].setText(str(self.protocol_tx_req_count))
         self.protocol_labels["last_seq"].setText(str(self.protocol_last_seq))
 
     # -------------------------------------------------------------------------
     # IMU dashboard
+    # -------------------------------------------------------------------------
+
     # -------------------------------------------------------------------------
 
     def _parse_kv_payload(self, text: str) -> dict[str, str]:

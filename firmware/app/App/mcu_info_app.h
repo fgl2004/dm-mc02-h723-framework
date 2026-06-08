@@ -11,8 +11,16 @@ extern "C" {
 #include "platform_reset.h"
 #include "command_service.h"
 
+/*
+ * McuInfoApp
+ *
+ * Refactor note:
+ *   - McuInfoApp no longer owns an internal event queue.
+ *   - Events are posted directly into EventManager.
+ *   - EventManager -> ProtocolManager -> TX priority queue -> UART TX DMA.
+ */
+
 #define MCU_INFO_APP_MAX_EVENT_PAYLOAD_SIZE      64U
-#define MCU_INFO_APP_EVENT_QUEUE_SIZE            8U
 #define MCU_INFO_APP_MAX_SNAPSHOT_PAYLOAD_SIZE   64U
 #define MCU_INFO_APP_SNAPSHOT_SLOT_COUNT         8U
 
@@ -27,21 +35,21 @@ typedef enum
 } McuInfoAppResult_t;
 
 /*
- * Current Stage 2 basic commands.
- * These values are kept compatible with the current PC python tools.
+ * Current basic commands.
+ * These values are kept compatible with current PC python tools.
  */
 typedef enum
 {
-    MCU_INFO_CMD_PING           = SYS_CMD_PING,
-    MCU_INFO_CMD_GET_VERSION    = SYS_CMD_GET_VERSION,
-    MCU_INFO_CMD_GET_STATUS     = SYS_CMD_GET_STATUS,
-    MCU_INFO_CMD_GET_RESET_INFO = SYS_CMD_GET_RESET_INFO,
-    MCU_INFO_CMD_GET_TIME_INFO  = SYS_CMD_GET_TIME_INFO,
-    MCU_INFO_CMD_GET_FAULT_INFO = SYS_CMD_GET_FAULT_INFO,
-    MCU_INFO_CMD_GET_UART_STATS = SYS_CMD_GET_UART_STATS,
-    MCU_INFO_CMD_GET_APP_STATS  = SYS_CMD_GET_APP_STATS,
-    MCU_INFO_CMD_GET_EVENT_STATS = SYS_CMD_GET_EVENT_STATS,
-	  MCU_INFO_CMD_GET_COMMAND_STATS    =   CMD_GET_COMMAND_STATS
+    MCU_INFO_CMD_PING              = SYS_CMD_PING,
+    MCU_INFO_CMD_GET_VERSION       = SYS_CMD_GET_VERSION,
+    MCU_INFO_CMD_GET_STATUS        = SYS_CMD_GET_STATUS,
+    MCU_INFO_CMD_GET_RESET_INFO    = SYS_CMD_GET_RESET_INFO,
+    MCU_INFO_CMD_GET_TIME_INFO     = SYS_CMD_GET_TIME_INFO,
+    MCU_INFO_CMD_GET_FAULT_INFO    = SYS_CMD_GET_FAULT_INFO,
+    MCU_INFO_CMD_GET_UART_STATS    = SYS_CMD_GET_UART_STATS,
+    MCU_INFO_CMD_GET_APP_STATS     = SYS_CMD_GET_APP_STATS,
+    MCU_INFO_CMD_GET_EVENT_STATS   = SYS_CMD_GET_EVENT_STATS,
+    MCU_INFO_CMD_GET_COMMAND_STATS = CMD_GET_COMMAND_STATS
 } McuInfoCommandId_t;
 
 typedef enum
@@ -84,15 +92,6 @@ typedef struct
 
 typedef struct
 {
-    uint8_t app_id;
-    uint8_t event_id;
-    uint16_t payload_len;
-    uint32_t tick_ms;
-    uint8_t payload[MCU_INFO_APP_MAX_EVENT_PAYLOAD_SIZE];
-} McuInfoEventRecord_t;
-
-typedef struct
-{
     uint32_t init_count;
     uint32_t run_count;
 
@@ -108,6 +107,7 @@ typedef struct
     uint32_t get_uart_stats_count;
     uint32_t get_app_stats_count;
     uint32_t get_event_stats_count;
+    uint32_t get_command_stats_count;
 
     uint32_t post_event_count;
     uint32_t event_forward_count;
